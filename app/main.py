@@ -4,6 +4,11 @@ from typing import List
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from loguru import logger
+import sys
+
+# 로거 설정 강화 (Render에서 보이도록)
+logger.remove()  # 기본 핸들러 제거
+logger.add(sys.stdout, level="INFO", format="{time} | {level} | {message}")
 from sqlmodel import SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
@@ -52,12 +57,36 @@ async def on_startup():
 async def health():
     return {"ok": True}
 
+@app.post("/test-skill")
+async def test_skill_endpoint(request: Request):
+    """테스트용 엔드포인트 - 받은 데이터를 그대로 반환"""
+    try:
+        body = await request.json()
+        print(f"TEST ENDPOINT - Received: {body}")
+        logger.info(f"TEST ENDPOINT - Received: {body}")
+        
+        # user_id 추출 테스트
+        user_id = body.get("userRequest", {}).get("user", {}).get("id")
+        print(f"TEST ENDPOINT - Extracted user_id: {user_id}")
+        
+        return {
+            "received_data": body,
+            "extracted_user_id": user_id,
+            "data_keys": list(body.keys()) if isinstance(body, dict) else "not_dict"
+        }
+    except Exception as e:
+        print(f"TEST ENDPOINT - Error: {e}")
+        return {"error": str(e)}
+
 @app.post("/skill")
 async def skill_endpoint(
     request: Request,
     kakao: KakaoBody,
     session: AsyncSession = Depends(get_session)
 ):
+    # 최우선 로그 - 요청이 들어왔다는 것부터 확인
+    print(f"=== SKILL REQUEST RECEIVED ===")
+    logger.info("=== SKILL REQUEST RECEIVED ===")
     # 1) 헤더 추적값
     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
     logger.bind(x_request_id=x_request_id).info("Incoming skill request")
