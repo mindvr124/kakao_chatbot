@@ -53,10 +53,6 @@ async def on_startup():
             logger.info("Default prompt template created")
         break
 
-# =============================================================================
-# 기본 엔드포인트
-# =============================================================================
-
 @app.get("/health")
 async def health():
     """기본 헬스체크"""
@@ -64,18 +60,8 @@ async def health():
 
 @app.get("/")
 async def root():
-    """루트 엔드포인트 - API 정보"""
-    return {
-        "service": "카카오 심리상담 AI 챗봇",
-        "version": "1.0.0",
-        "endpoints": {
-            "kakao_skill": "/skill",
-            "health": "/health", 
-            "admin": "/admin/*",
-            "docs": "/docs"
-        }
-    }
-
+    return {"ok": True, "service": "kakao_chatbot"}
+    
 # =============================================================================
 # 카카오 스킬 엔드포인트
 # =============================================================================
