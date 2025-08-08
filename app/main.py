@@ -77,14 +77,17 @@ async def skill_endpoint(
     user_text = kakao.userRequest.get("utterance", "") if kakao.userRequest else ""
     await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
 
-    # 4) 즉시 응답 (5초 제한) — 접수 안내
-    immediate = callback_waiting_response("🤖 AI가 답변을 생성하고 있어요!\n잠시만 기다려 주세요...")
-
-    # 5) 비동기 콜백 작업 시작
+    # 4) 콜백 여부에 따른 응답 분기
     if callback_url:
+        # 콜백이 있는 경우: 즉시 콜백 대기 응답 + 비동기 처리
         asyncio.create_task(_handle_callback(callback_url, conv.conv_id, user_text, x_request_id, session_maker=get_session))
+        
+        # 콜백 대기 응답
+        immediate = callback_waiting_response("🤖 AI가 답변을 생성하고 있어요!\n잠시만 기다려 주세요...")
+        return JSONResponse(content=immediate)
+        
     else:
-        # 콜백이 없는 블록이라면, 여기서 바로 LLM을 호출해 즉시 응답을 반환해야 함.
+        # 콜백이 없는 경우: 즉시 AI 응답 생성 후 반환
         try:
             final_text, tokens_used = await ai_service.generate_response(
                 session=session, 
@@ -107,12 +110,11 @@ async def skill_endpoint(
             logger.bind(x_request_id=x_request_id).exception(f"AI generation failed: {e}")
             final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
             
+        # 일반 템플릿 응답 반환
         return JSONResponse(content={
             "version": "2.0",
             "template": {"outputs":[{"simpleText":{"text": final_text}}]}
         })
-
-    return JSONResponse(content=immediate)
 
 async def _handle_callback(callback_url: str, conv_id, user_text: str, x_request_id: str | None, session_maker):
     """
