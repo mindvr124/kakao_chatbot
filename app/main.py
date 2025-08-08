@@ -53,13 +53,36 @@ async def on_startup():
             logger.info("Default prompt template created")
         break
 
+# =============================================================================
+# 기본 엔드포인트
+# =============================================================================
+
 @app.get("/health")
 async def health():
+    """기본 헬스체크"""
     return {"ok": True}
+
+@app.get("/")
+async def root():
+    """루트 엔드포인트 - API 정보"""
+    return {
+        "service": "카카오 심리상담 AI 챗봇",
+        "version": "1.0.0",
+        "endpoints": {
+            "kakao_skill": "/skill",
+            "health": "/health", 
+            "admin": "/admin/*",
+            "docs": "/docs"
+        }
+    }
+
+# =============================================================================
+# 카카오 스킬 엔드포인트
+# =============================================================================
 
 @app.post("/test-skill")
 async def test_skill_endpoint(request: Request):
-    """테스트용 엔드포인트 - 받은 데이터를 그대로 반환"""
+    """디버깅용 테스트 엔드포인트 - 받은 데이터를 그대로 반환"""
     try:
         body = await request.json()
         print(f"TEST ENDPOINT - Received: {body}")
@@ -81,78 +104,145 @@ async def test_skill_endpoint(request: Request):
 @app.post("/skill")
 async def skill_endpoint(
     request: Request,
-    kakao: KakaoBody,
     session: AsyncSession = Depends(get_session)
 ):
-    # 최우선 로그 - 요청이 들어왔다는 것부터 확인
-    print(f"=== SKILL REQUEST RECEIVED ===")
     logger.info("=== SKILL REQUEST RECEIVED ===")
-    # 1) 헤더 추적값
     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-    logger.bind(x_request_id=x_request_id).info("Incoming skill request")
 
-    body_dict = kakao.model_dump()
-    
-    # 디버깅: 받은 데이터 로깅
-    logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
-    
-    user_id = extract_user_id(body_dict)
-    logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
-    
-    if not user_id:
-        logger.bind(x_request_id=x_request_id).error(f"user_id not found in request. Body structure: {body_dict}")
-        raise HTTPException(400, f"user_id not found in request. Received structure: {list(body_dict.keys())}")
-
-    callback_url = extract_callback_url(body_dict)
-    # 콜백 완전 비활성화 (관리자센터에서 콜백 OFF 운용)
-    callback_url = None
-
-    # 2) 유저/대화 upsert
-    await upsert_user(session, user_id)
-    conv = await get_or_create_conversation(session, user_id)
-
-    # 3) 유저 발화 저장
-    user_text = kakao.userRequest.get("utterance", "") if kakao.userRequest else ""
-    await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
-
-    # 4) 콜백 여부에 따른 응답 분기
-    if callback_url:
-        # 콜백이 있는 경우: 즉시 콜백 대기 응답 + 비동기 처리
-        asyncio.create_task(_handle_callback(callback_url, conv.conv_id, user_text, x_request_id, session_maker=get_session))
-        
-        # 콜백 대기 응답
-        immediate = callback_waiting_response("🤖 AI가 답변을 생성하고 있어요!\n잠시만 기다려 주세요...")
-        return JSONResponse(content=immediate)
-        
-    else:
-        # 콜백이 없는 경우: 즉시 AI 응답 생성 후 반환
-        try:
-            final_text, tokens_used = await ai_service.generate_response(
-                session=session, 
-                conv_id=conv.conv_id, 
-                user_input=user_text,
-                prompt_name="default"
-            )
-            
-            # AI 응답 저장
-            await save_message(
-                session=session, 
-                conv_id=conv.conv_id, 
-                role="assistant", 
-                content=final_text, 
-                request_id=x_request_id,
-                tokens=tokens_used
-            )
-            
-        except Exception as e:
-            logger.bind(x_request_id=x_request_id).exception(f"AI generation failed: {e}")
-            final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-            
-        # 일반 템플릿 응답 반환
+    # 0) 원문 파싱 — 실패해도 200으로 안내
+    try:
+        body_dict = await request.json()
+    except Exception as e:
+        logger.bind(x_request_id=x_request_id).warning(f"not JSON: {e}")
         return JSONResponse(content={
             "version": "2.0",
-            "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+            "template": {"outputs":[{"simpleText":{"text":"요청이 JSON 형식이 아닙니다."}}]}
         })
+
+    logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
+
+    # 1) 관대한 user_id/utterance 추출 (없어도 절대 400 내지 않음)
+    ur = (body_dict.get("userRequest") or {})
+    user = (ur.get("user") or {})
+    user_id = (
+        user.get("id")
+        or user.get("properties", {}).get("botUserKey")
+        or ur.get("userId")
+        or (body_dict.get("user") or {}).get("id")
+        or "unknown_user"
+    )
+    user_text = ur.get("utterance", "") or ""
+
+    # 2) 콜백은 현재 비활성(강제 OFF)
+    callback_url = None
+
+    # 3) DB 저장 + LLM 호출 — 실패해도 200으로 감싸서 반환
+    try:
+        await upsert_user(session, user_id)
+        conv = await get_or_create_conversation(session, user_id)
+        await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
+
+        final_text, tokens_used = await ai_service.generate_response(
+            session=session,
+            conv_id=conv.conv_id,
+            user_input=user_text,
+            prompt_name="default"
+        )
+
+        await save_message(
+            session=session,
+            conv_id=conv.conv_id,
+            role="assistant",
+            content=final_text,
+            request_id=x_request_id,
+            tokens=tokens_used
+        )
+
+    except Exception as e:
+        logger.bind(x_request_id=x_request_id).exception(f"/skill error: {e}")
+        final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+    # 4) 항상 카카오 포맷으로 200 반환
+    return JSONResponse(content={
+        "version": "2.0",
+        "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+    })
+    
+# @app.post("/skill")
+# async def skill_endpoint(
+#     request: Request,
+#     kakao: KakaoBody,
+#     session: AsyncSession = Depends(get_session)
+# ):
+#     # 최우선 로그 - 요청이 들어왔다는 것부터 확인
+#     print(f"=== SKILL REQUEST RECEIVED ===")
+#     logger.info("=== SKILL REQUEST RECEIVED ===")
+#     # 1) 헤더 추적값
+#     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+#     logger.bind(x_request_id=x_request_id).info("Incoming skill request")
+
+#     body_dict = kakao.model_dump()
+    
+#     # 디버깅: 받은 데이터 로깅
+#     logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
+    
+#     user_id = extract_user_id(body_dict)
+#     logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
+    
+#     if not user_id:
+#         logger.bind(x_request_id=x_request_id).error(f"user_id not found in request. Body structure: {body_dict}")
+#         raise HTTPException(400, f"user_id not found in request. Received structure: {list(body_dict.keys())}")
+
+#     callback_url = extract_callback_url(body_dict)
+#     # 콜백 완전 비활성화 (관리자센터에서 콜백 OFF 운용)
+#     callback_url = None
+
+#     # 2) 유저/대화 upsert
+#     await upsert_user(session, user_id)
+#     conv = await get_or_create_conversation(session, user_id)
+
+#     # 3) 유저 발화 저장
+#     user_text = kakao.userRequest.get("utterance", "") if kakao.userRequest else ""
+#     await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
+
+#     # 4) 콜백 여부에 따른 응답 분기
+#     if callback_url:
+#         # 콜백이 있는 경우: 즉시 콜백 대기 응답 + 비동기 처리
+#         asyncio.create_task(_handle_callback(callback_url, conv.conv_id, user_text, x_request_id, session_maker=get_session))
+        
+#         # 콜백 대기 응답
+#         immediate = callback_waiting_response("🤖 AI가 답변을 생성하고 있어요!\n잠시만 기다려 주세요...")
+#         return JSONResponse(content=immediate)
+        
+#     else:
+#         # 콜백이 없는 경우: 즉시 AI 응답 생성 후 반환
+#         try:
+#             final_text, tokens_used = await ai_service.generate_response(
+#                 session=session, 
+#                 conv_id=conv.conv_id, 
+#                 user_input=user_text,
+#                 prompt_name="default"
+#             )
+            
+#             # AI 응답 저장
+#             await save_message(
+#                 session=session, 
+#                 conv_id=conv.conv_id, 
+#                 role="assistant", 
+#                 content=final_text, 
+#                 request_id=x_request_id,
+#                 tokens=tokens_used
+#             )
+            
+#         except Exception as e:
+#             logger.bind(x_request_id=x_request_id).exception(f"AI generation failed: {e}")
+#             final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            
+#         # 일반 템플릿 응답 반환
+#         return JSONResponse(content={
+#             "version": "2.0",
+#             "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+#         })
 
 async def _handle_callback(callback_url: str, conv_id, user_text: str, x_request_id: str | None, session_maker):
     """
@@ -201,7 +291,36 @@ async def _handle_callback(callback_url: str, conv_id, user_text: str, x_request
     except Exception as e:
         logger.bind(x_request_id=x_request_id).exception(f"Callback failed: {e}")
 
-# 프롬프트 관리 API 엔드포인트들
+# =============================================================================
+# 관리자 API 엔드포인트
+# =============================================================================
+
+@app.get("/admin/health")
+async def admin_health(session: AsyncSession = Depends(get_session)):
+    """관리자용 상세 헬스체크"""
+    try:
+        # DB 연결 테스트
+        prompts = await get_prompt_templates(session, active_only=True)
+        
+        # OpenAI API 키 확인
+        from .config import settings
+        openai_key_configured = bool(settings.openai_api_key)
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "active_prompts": len(prompts),
+            "openai_configured": openai_key_configured,
+            "ai_model": ai_service.model,
+            "temperature": ai_service.temperature
+        }
+    except Exception as e:
+        logger.exception("Health check failed")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
 @app.post("/admin/prompts", response_model=PromptTemplateResponse)
 async def create_prompt(
     prompt_data: PromptTemplateCreate,
@@ -248,29 +367,3 @@ async def activate_prompt(
     if not success:
         raise HTTPException(status_code=404, detail="Prompt template not found")
     return {"message": "Prompt template activated successfully"}
-
-@app.get("/admin/health")
-async def admin_health(session: AsyncSession = Depends(get_session)):
-    """관리자용 상세 헬스체크"""
-    try:
-        # DB 연결 테스트
-        prompts = await get_prompt_templates(session, active_only=True)
-        
-        # OpenAI API 키 확인
-        from .config import settings
-        openai_key_configured = bool(settings.openai_api_key)
-        
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "active_prompts": len(prompts),
-            "openai_configured": openai_key_configured,
-            "ai_model": ai_service.model,
-            "temperature": ai_service.temperature
-        }
-    except Exception as e:
-        logger.exception("Health check failed")
-        return {
-            "status": "unhealthy",
-            "error": str(e)
-        }
