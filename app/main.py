@@ -68,6 +68,8 @@ async def skill_endpoint(
         raise HTTPException(400, "user_id not found in request")
 
     callback_url = extract_callback_url(body_dict)
+    # 콜백 완전 비활성화 (관리자센터에서 콜백 OFF 운용)
+    callback_url = None
 
     # 2) 유저/대화 upsert
     await upsert_user(session, user_id)
