@@ -5,6 +5,7 @@ sqlmodel==0.0.22
 sqlalchemy==2.0.31
 psycopg[binary]==3.2.9
 alembic==1.13.2
+greenlet>=3.0.3
 
 httpx==0.27.2
 loguru==0.7.2
