@@ -53,6 +53,10 @@ async def on_startup():
             logger.info("Default prompt template created")
         break
 
+@app.get("/")
+async def root():
+    return {"ok": True, "service": "kakao_chatbot"}
+    
 @app.get("/health")
 async def health():
     return {"ok": True}
