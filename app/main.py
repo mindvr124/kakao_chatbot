@@ -63,9 +63,16 @@ async def skill_endpoint(
     logger.bind(x_request_id=x_request_id).info("Incoming skill request")
 
     body_dict = kakao.model_dump()
+    
+    # 디버깅: 받은 데이터 로깅
+    logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
+    
     user_id = extract_user_id(body_dict)
+    logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
+    
     if not user_id:
-        raise HTTPException(400, "user_id not found in request")
+        logger.bind(x_request_id=x_request_id).error(f"user_id not found in request. Body structure: {body_dict}")
+        raise HTTPException(400, f"user_id not found in request. Received structure: {list(body_dict.keys())}")
 
     callback_url = extract_callback_url(body_dict)
     # 콜백 완전 비활성화 (관리자센터에서 콜백 OFF 운용)
