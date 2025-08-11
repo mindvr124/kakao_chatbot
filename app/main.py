@@ -87,6 +87,8 @@ async def test_skill_endpoint(request: Request):
         print(f"TEST ENDPOINT - Error: {e}")
         return {"error": str(e)}
 
+from fastapi.responses import JSONResponse
+
 @app.post("/skill")
 async def skill_endpoint(
     request: Request,
@@ -95,19 +97,27 @@ async def skill_endpoint(
     logger.info("=== SKILL REQUEST RECEIVED ===")
     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
 
-    # 0) 원문 파싱 — 실패해도 200으로 안내
+    # 요청 JSON 파싱
     try:
         body_dict = await request.json()
     except Exception as e:
         logger.bind(x_request_id=x_request_id).warning(f"not JSON: {e}")
-        return JSONResponse(content={
-            "version": "2.0",
-            "template": {"outputs":[{"simpleText":{"text":"요청이 JSON 형식이 아닙니다."}}]}
-        })
+        return JSONResponse(
+            content={
+                "version": "2.0",
+                "template": {
+                    "outputs": [
+                        {"simpleText": {"text": "요청이 JSON 형식이 아닙니다."}}
+                    ]
+                }
+            },
+            status_code=200,
+            media_type="application/json"
+        )
 
     logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
 
-    # 1) 관대한 user_id/utterance 추출 (없어도 절대 400 내지 않음)
+    # user_id 추출
     ur = (body_dict.get("userRequest") or {})
     user = (ur.get("user") or {})
     user_id = (
@@ -117,12 +127,11 @@ async def skill_endpoint(
         or (body_dict.get("user") or {}).get("id")
         or "unknown_user"
     )
+
+    # 사용자 발화
     user_text = ur.get("utterance", "") or ""
 
-    # 2) 콜백은 현재 비활성(강제 OFF)
-    callback_url = None
-
-    # 3) DB 저장 + LLM 호출 — 실패해도 200으로 감싸서 반환
+    # LLM 응답 생성
     try:
         await upsert_user(session, user_id)
         conv = await get_or_create_conversation(session, user_id)
@@ -148,11 +157,20 @@ async def skill_endpoint(
         logger.bind(x_request_id=x_request_id).exception(f"/skill error: {e}")
         final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
 
-    # 4) 항상 카카오 포맷으로 200 반환
-    return JSONResponse(content={
-        "version": "2.0",
-        "template": {"outputs":[{"simpleText":{"text": final_text}}]}
-    })
+    # 카카오 스킬 응답(JSON) — 여기서 Invalid Json 안 나게 보장
+    return JSONResponse(
+        content={
+            "version": "2.0",
+            "template": {
+                "outputs": [
+                    {"simpleText": {"text": str(final_text) if final_text else ""}}
+                ]
+            }
+        },
+        status_code=200,
+        media_type="application/json"
+    )
+
     
 # @app.post("/skill")
 # async def skill_endpoint(
