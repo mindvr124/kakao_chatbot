@@ -77,3 +77,35 @@ class PromptTemplateUpdate(BaseModel):
     system_prompt: Optional[str] = None
     description: Optional[str] = None
     user_prompt_template: Optional[str] = None
+
+# AI 처리 작업 관련 스키마
+class AIProcessingTaskResponse(BaseModel):
+    task_id: UUID
+    conv_id: UUID
+    status: str
+    user_input: str
+    retry_count: int
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    result_message_id: Optional[UUID] = None
+
+class AIProcessingStatusResponse(BaseModel):
+    task_id: UUID
+    status: str
+    created_at: datetime
+    retry_count: int
+    ai_response: Optional[str] = None
+    tokens_used: Optional[int] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+
+class AIProcessingTaskListResponse(BaseModel):
+    tasks: list[AIProcessingTaskResponse]
+    total: int
+
+class RetryAIProcessingTaskResponse(BaseModel):
+    message: str
+    task_id: UUID

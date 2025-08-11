@@ -15,8 +15,19 @@ def extract_user_id(kakao_body: dict) -> str | None:
 
 def extract_callback_url(kakao_body: dict) -> str | None:
     # 콜백 활성 블록이면 여기에 들어옴(플랫폼 설정에 따라 위치가 다를 수 있어 방어적으로)
-    return (
+    callback_url = (
         kakao_body.get("callbackUrl")
         or kakao_body.get("userRequest", {}).get("callbackUrl")
         or kakao_body.get("action", {}).get("callbackUrl")
+        or kakao_body.get("context", {}).get("callbackUrl")
+        or kakao_body.get("bot", {}).get("callbackUrl")
     )
+    
+    # 디버깅용 로그
+    print(f"DEBUG: Searching for callbackUrl in: {list(kakao_body.keys())}")
+    if callback_url:
+        print(f"DEBUG: Found callbackUrl: {callback_url}")
+    else:
+        print(f"DEBUG: No callbackUrl found. Full body: {kakao_body}")
+    
+    return callback_url

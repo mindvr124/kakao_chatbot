@@ -12,20 +12,19 @@ from .config import settings
 
 class AIService:
     def __init__(self):
+        # 환경 변수에서 직접 API 키 가져오기
+        api_key = os.getenv('OPENAI_API_KEY') or settings.openai_api_key
+        if not api_key:
+            logger.warning("OpenAI API key not found in environment variables")
+            api_key = "dummy_key"  # 임시 키로 초기화
+            
         self.client = AsyncOpenAI(
-            api_key=settings.openai_api_key
+            api_key=api_key
         )
         self.model = settings.openai_model
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
-        self.default_system_prompt = """당신은 카카오 비즈니스 AI 상담사입니다. 
-다음 원칙을 따라 응답해주세요:
-
-1. 친근하고 전문적인 톤으로 대화하세요
-2. 사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요  
-3. 모르는 내용은 솔직히 모른다고 하고, 추가 도움을 제안하세요
-4. 답변은 간결하면서도 충분한 정보를 포함하세요
-5. 한국어로 자연스럽게 대화하세요"""
+        self.default_system_prompt = """당신은 AI 심리 상담사입니다. 친근하고 공감적인 톤으로 간결하게 답변하세요."""
 
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
         """활성화된 프롬프트 템플릿을 가져옵니다."""
@@ -57,18 +56,10 @@ class AIService:
         prompt_template = await self.get_active_prompt(session, prompt_name)
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
         
-        # 대화 히스토리 가져오기
-        history = await self.get_conversation_history(session, conv_id, limit=8)
-        
-        # 메시지 배열 구성
+        # 메시지 배열 구성 (히스토리 없이 최대 속도 최적화)
         messages = [{"role": "system", "content": system_prompt}]
         
-        # 히스토리 추가 (최근 4턴 정도만)
-        for msg in history[-8:]:  # 최근 8개 메시지 (4턴)
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
+        # 히스토리 제거로 최대 속도 확보 (각 대화가 독립적)
         
         # 현재 사용자 입력 추가
         messages.append({"role": "user", "content": user_input})

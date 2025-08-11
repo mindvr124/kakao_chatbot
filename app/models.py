@@ -9,6 +9,12 @@ class MessageRole(str, Enum):
     ASSISTANT = "assistant"
     SYSTEM = "system"
 
+class AIProcessingStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
 class AppUser(SQLModel, table=True):
     user_id: str = Field(primary_key=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -28,6 +34,21 @@ class Message(SQLModel, table=True):
     tokens: Optional[int] = None
     request_id: Optional[str] = Field(default=None, index=True)  # X-Request-ID 등
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+class AIProcessingTask(SQLModel, table=True):
+    """AI 처리 작업 상태를 추적하는 모델"""
+    task_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
+    user_input: str
+    status: AIProcessingStatus = Field(default=AIProcessingStatus.PENDING, index=True)
+    request_id: Optional[str] = Field(default=None, index=True)
+    error_message: Optional[str] = None
+    retry_count: int = Field(default=0)
+    max_retries: int = Field(default=3)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    started_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+    result_message_id: Optional[UUID] = Field(default=None, foreign_key="message.msg_id")
 
 class PromptTemplate(SQLModel, table=True):
     prompt_id: UUID = Field(default_factory=uuid4, primary_key=True)

@@ -16,11 +16,11 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DATABASE_URL"),
     )
 
-    # OpenAI
+    # OpenAI - 속도 최적화 설정
     openai_api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY"))
-    openai_model: str = Field(default="gpt-4o", validation_alias=AliasChoices("OPENAI_MODEL"))
-    openai_temperature: float = Field(default=0.2, validation_alias=AliasChoices("OPENAI_TEMPERATURE"))
-    openai_max_tokens: int = Field(default=1000, validation_alias=AliasChoices("OPENAI_MAX_TOKENS"))
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL"))  # 더 빠른 모델
+    openai_temperature: float = Field(default=0.1, validation_alias=AliasChoices("OPENAI_TEMPERATURE"))  # 더 빠른 결정
+    openai_max_tokens: int = Field(default=150, validation_alias=AliasChoices("OPENAI_MAX_TOKENS"))  # 최대 속도를 위한 짧은 응답
 
     # 세션/서버
     session_timeout_minutes: int = Field(default=30, validation_alias=AliasChoices("SESSION_TIMEOUT_MINUTES"))
