@@ -89,87 +89,110 @@ async def test_skill_endpoint(request: Request):
 
 from fastapi.responses import JSONResponse
 
+from fastapi.responses import JSONResponse
+
 @app.post("/skill")
-async def skill_endpoint(
-    request: Request,
-    session: AsyncSession = Depends(get_session)
-):
-    logger.info("=== SKILL REQUEST RECEIVED ===")
-    x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-
+async def skill_endpoint(request: Request):
     # 요청 JSON 파싱
-    try:
-        body_dict = await request.json()
-    except Exception as e:
-        logger.bind(x_request_id=x_request_id).warning(f"not JSON: {e}")
-        return JSONResponse(
-            content={
-                "version": "2.0",
-                "template": {
-                    "outputs": [
-                        {"simpleText": {"text": "요청이 JSON 형식이 아닙니다."}}
-                    ]
-                }
-            },
-            status_code=200,
-            media_type="application/json"
-        )
+    body = await request.json()
+    user_text = body.get("userRequest", {}).get("utterance", "")
 
-    logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
-
-    # user_id 추출
-    ur = (body_dict.get("userRequest") or {})
-    user = (ur.get("user") or {})
-    user_id = (
-        user.get("id")
-        or user.get("properties", {}).get("botUserKey")
-        or ur.get("userId")
-        or (body_dict.get("user") or {}).get("id")
-        or "unknown_user"
-    )
-
-    # 사용자 발화
-    user_text = ur.get("utterance", "") or ""
-
-    # LLM 응답 생성
-    try:
-        await upsert_user(session, user_id)
-        conv = await get_or_create_conversation(session, user_id)
-        await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
-
-        final_text, tokens_used = await ai_service.generate_response(
-            session=session,
-            conv_id=conv.conv_id,
-            user_input=user_text,
-            prompt_name="default"
-        )
-
-        await save_message(
-            session=session,
-            conv_id=conv.conv_id,
-            role="assistant",
-            content=final_text,
-            request_id=x_request_id,
-            tokens=tokens_used
-        )
-
-    except Exception as e:
-        logger.bind(x_request_id=x_request_id).exception(f"/skill error: {e}")
-        final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-
-    # 카카오 스킬 응답(JSON) — 여기서 Invalid Json 안 나게 보장
+    # 응답 생성
     return JSONResponse(
         content={
             "version": "2.0",
             "template": {
                 "outputs": [
-                    {"simpleText": {"text": str(final_text) if final_text else ""}}
+                    {"simpleText": {"text": f"안녕하세요! '{user_text}'라고 하셨네요."}}
                 ]
             }
         },
         status_code=200,
-        media_type="application/json"
+        media_type="application/json; charset=utf-8"
     )
+
+
+# @app.post("/skill")
+# async def skill_endpoint(
+#     request: Request,
+#     session: AsyncSession = Depends(get_session)
+# ):
+#     logger.info("=== SKILL REQUEST RECEIVED ===")
+#     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+
+#     # 요청 JSON 파싱
+#     try:
+#         body_dict = await request.json()
+#     except Exception as e:
+#         logger.bind(x_request_id=x_request_id).warning(f"not JSON: {e}")
+#         return JSONResponse(
+#             content={
+#                 "version": "2.0",
+#                 "template": {
+#                     "outputs": [
+#                         {"simpleText": {"text": "요청이 JSON 형식이 아닙니다."}}
+#                     ]
+#                 }
+#             },
+#             status_code=200,
+#             media_type="application/json"
+#         )
+
+#     logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
+
+#     # user_id 추출
+#     ur = (body_dict.get("userRequest") or {})
+#     user = (ur.get("user") or {})
+#     user_id = (
+#         user.get("id")
+#         or user.get("properties", {}).get("botUserKey")
+#         or ur.get("userId")
+#         or (body_dict.get("user") or {}).get("id")
+#         or "unknown_user"
+#     )
+
+#     # 사용자 발화
+#     user_text = ur.get("utterance", "") or ""
+
+#     # LLM 응답 생성
+#     try:
+#         await upsert_user(session, user_id)
+#         conv = await get_or_create_conversation(session, user_id)
+#         await save_message(session, conv.conv_id, role="user", content=user_text, request_id=x_request_id)
+
+#         final_text, tokens_used = await ai_service.generate_response(
+#             session=session,
+#             conv_id=conv.conv_id,
+#             user_input=user_text,
+#             prompt_name="default"
+#         )
+
+#         await save_message(
+#             session=session,
+#             conv_id=conv.conv_id,
+#             role="assistant",
+#             content=final_text,
+#             request_id=x_request_id,
+#             tokens=tokens_used
+#         )
+
+#     except Exception as e:
+#         logger.bind(x_request_id=x_request_id).exception(f"/skill error: {e}")
+#         final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+#     # 카카오 스킬 응답(JSON) — 여기서 Invalid Json 안 나게 보장
+#     return JSONResponse(
+#         content={
+#             "version": "2.0",
+#             "template": {
+#                 "outputs": [
+#                     {"simpleText": {"text": str(final_text) if final_text else ""}}
+#                 ]
+#             }
+#         },
+#         status_code=200,
+#         media_type="application/json"
+#     )
 
     
 # @app.post("/skill")
