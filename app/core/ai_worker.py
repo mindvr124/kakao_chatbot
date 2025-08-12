@@ -5,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 import time
 
-from .models import AIProcessingTask, AIProcessingStatus
-from .ai_processing_service import ai_processing_service
-from .db import AsyncSessionLocal
+from app.database.models import AIProcessingTask, AIProcessingStatus
+from app.core.ai_processing_service import ai_processing_service
+from app.database.db import AsyncSessionLocal
 
 class AIWorker:
     """백그라운드에서 AI 작업을 처리하는 워커"""

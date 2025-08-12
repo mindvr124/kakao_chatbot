@@ -5,12 +5,15 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db import get_session
-from .schemas import KakaoBody, simple_text
-from .service import upsert_user, get_or_create_conversation
-from .utils import extract_user_id, extract_callback_url
-from .ai_service import ai_service
-from .background_tasks import _save_user_message_background, _save_ai_response_background
+from app.database.db import get_session
+from app.schemas.schemas import simple_text, callback_waiting_response
+from app.database.service import upsert_user, get_or_create_conversation, save_message
+from app.utils.utils import extract_user_id, extract_callback_url
+from app.core.ai_service import ai_service
+from app.core.background_tasks import _save_user_message_background, _save_ai_response_background
+from app.main import http_client, BUDGET, ENABLE_CALLBACK
+import time
+import asyncio
 
 router = APIRouter()
 
@@ -18,76 +21,202 @@ router = APIRouter()
 @router.post("/skill")
 async def skill_endpoint(
     request: Request,
-    kakao: KakaoBody,
     session: AsyncSession = Depends(get_session)
 ):
     # 최우선 로그 - 요청이 들어왔다는 것부터 확인
     print(f"=== SKILL REQUEST RECEIVED ===")
     logger.info("=== SKILL REQUEST RECEIVED ===")
     
-    # 1) 헤더 추적값
-    x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-    logger.bind(x_request_id=x_request_id).info("Incoming skill request")
-
-    body_dict = kakao.model_dump()
-    
-    # 디버깅: 받은 데이터 로깅
-    logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
-    
-    user_id = extract_user_id(body_dict)
-    logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
-    
-    if not user_id:
-        logger.bind(x_request_id=x_request_id).error(f"user_id not found in request. Body structure: {body_dict}")
-        raise HTTPException(400, f"user_id not found in request. Received structure: {list(body_dict.keys())}")
-
-    callback_url = extract_callback_url(body_dict)
-    logger.bind(x_request_id=x_request_id).info(f"Extracted callback_url: {callback_url}")
-    logger.bind(x_request_id=x_request_id).info(f"Full body structure for callback detection: {body_dict}")
-
-    # 2) 유저/대화 upsert
-    await upsert_user(session, user_id)
-    conv = await get_or_create_conversation(session, user_id)
-
-    # 3) 유저 발화 추출
-    user_text = kakao.userRequest.get("utterance", "") if kakao.userRequest else ""
-    
-    # 사용자 메시지 저장도 백그라운드로 이동 (최대 속도 확보)
-    asyncio.create_task(_save_user_message_background(
-        conv.conv_id, user_text, x_request_id
-    ))
-    
-    # 4) 즉시 AI 응답 생성 (최대 속도)
     try:
-        final_text, tokens_used = await ai_service.generate_response(
-            session=session, 
-            conv_id=conv.conv_id, 
-            user_input=user_text,
-            prompt_name="default"
-        )
+        # 1) 헤더 추적값
+        x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+        logger.bind(x_request_id=x_request_id).info("Incoming skill request")
+
+        # 전체 요청 시간 추적 (카카오 5초 제한 대비)
+        t0 = time.perf_counter()
+
+        try:
+            body_dict = await request.json()
+            if not isinstance(body_dict, dict):
+                body_dict = {}
+        except Exception:
+            # JSON 파싱 실패 시에도 빈 바디로 진행해 400 방지
+            body_dict = {}
         
-        # 먼저 카카오로 응답 전송 (즉시 반환)
-        response = JSONResponse(content={
-            "version": "2.0",
-            "template": {"outputs":[{"simpleText":{"text": final_text}}]}
-        })
+        # 디버깅: 받은 데이터 로깅
+        logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
         
-        # 백그라운드에서 AI 응답 저장
-        asyncio.create_task(_save_ai_response_background(
-            conv.conv_id, final_text, tokens_used, x_request_id
-        ))
-        
-        return response
+        user_id = extract_user_id(body_dict)
+        logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
+
+        # 폴백: user_id가 비어있으면 익명 + X-Request-ID 사용
+        if not user_id:
+            anon_suffix = x_request_id or "unknown"
+            user_id = f"anonymous:{anon_suffix}"
+            logger.bind(x_request_id=x_request_id).warning(f"user_id missing. fallback -> {user_id}")
+
+        callback_url = extract_callback_url(body_dict)
+        logger.bind(x_request_id=x_request_id).info(f"Extracted callback_url: {callback_url}")
+
+        # 2) 콜백 요청이면 즉시 응답 후 비동기 콜백 (DB 이전)
+        # 3) 유저 발화 추출 (Optional userRequest 방어)
+        user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
+
+        if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
+            # 2-1) 5초 제한 내에서 남은 시간으로 동기 응답 시도 → 성공 시 즉시 응답
+            elapsed = time.perf_counter() - t0
+            time_left = max(0.2, 4.5 - elapsed)  # 여유 마진 확보
+            try:
+                quick_text, quick_tokens = await asyncio.wait_for(
+                    ai_service.generate_response(
+                        session=session,
+                        conv_id=f"temp_{user_id}",
+                        user_input=user_text,
+                        prompt_name="default"
+                    ),
+                    timeout=time_left,
+                )
+                return JSONResponse(content={
+                    "version": "2.0",
+                    "template": {"outputs":[{"simpleText":{"text": quick_text}}]}
+                }, media_type="application/json; charset=utf-8")
+            except Exception:
+                # 시간 내 미완료 → 콜백 즉시 응답으로 폴백
+                pass
+
+            # 2-2) 실패 시 콜백 즉시 응답 후 백그라운드에서 완료 콜백 전송
+            immediate = callback_waiting_response("답변을 생성 중입니다...")
+
+            async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
+                try:
+                    # 내부에서 독립 세션으로 모든 무거운 작업 처리
+                    async for s in get_session():
+                        try:
+                            await upsert_user(s, user_id)
+                            conv = await get_or_create_conversation(s, user_id)
+                            # AI 생성에 BUDGET 가드
+                            final_text, tokens_used = await asyncio.wait_for(
+                                ai_service.generate_response(
+                                    session=s,
+                                    conv_id=conv.conv_id,
+                                    user_input=user_text,
+                                    prompt_name="default"
+                                ),
+                                timeout=BUDGET,
+                            )
+                            await save_message(s, conv.conv_id, "assistant", final_text, request_id, tokens_used)
+                            break
+                        except Exception as inner_e:
+                            logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
+                            break
+
+                    # 콜백 POST (전역 http_client 재사용)
+                    # 1차 콜백: 최종 응답을 즉시 콜백으로 전송
+                    try:
+                        if http_client is not None:
+                            payload = {
+                                "version": "2.0",
+                                "template": {"outputs": [{"simpleText": {"text": final_text}}]}
+                            }
+                            headers = {"Content-Type": "application/json; charset=utf-8"}
+                            resp = await http_client.post(callback_url, json=payload, headers=headers)
+                            logger.bind(x_request_id=request_id).info(f"Callback status={resp.status_code}, tokens={tokens_used}")
+                            if resp.status_code >= 300:
+                                try:
+                                    err_txt = await resp.text()
+                                    logger.error(f"Callback non-2xx: {resp.status_code} body={err_txt}")
+                                except Exception:
+                                    pass
+                        else:
+                            logger.warning("http_client is not initialized; skipping callback send")
+                    except Exception as post_err:
+                        logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
+
+                    # 2차(옵션): 동기 즉시응답을 보낸 뒤라도, 최종 생성이 끝났다면 동일 본문을 추가 콜백으로 한 번 더 보내고 싶다면 여기에 구현
+                    # 현재는 1차 콜백만 수행. 필요 시 중복 방지 토큰을 붙여 멱등 처리 권장.
+                except asyncio.TimeoutError:
+                    # AI 타임아웃 시 간단 안내로 콜백
+                    try:
+                        if http_client is not None:
+                            payload = {
+                                "version": "2.0",
+                                "template": {"outputs": [{"simpleText": {"text": "답변 생성이 지연되어 간단히 안내드려요 🙏"}}]}
+                            }
+                            headers = {"Content-Type": "application/json; charset=utf-8"}
+                            await http_client.post(callback_url, json=payload, headers=headers)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.bind(x_request_id=request_id).exception(f"Callback flow failed: {e}")
+
+            asyncio.create_task(_handle_callback_full(callback_url, user_id, user_text, x_request_id))
+
+            return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
+
+        # 4) 즉시응답 경로만 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
+        try:
+            await upsert_user(session, user_id)
+            conv = await get_or_create_conversation(session, user_id)
+            conv_id = conv.conv_id
+        except Exception as db_err:
+            logger.warning(f"DB ops failed in immediate path: {db_err}")
+            conv_id = f"temp_{user_id}"
+
+        # 5) 콜백이 아닌 경우: AI 응답 생성 (BUDGET 적용)
+        try:
+            logger.info(f"Generating AI response for: {user_text}")
+            try:
+                final_text, tokens_used = await asyncio.wait_for(
+                    ai_service.generate_response(
+                        session=session,
+                        conv_id=conv_id,
+                        user_input=user_text,
+                        prompt_name="default"
+                    ),
+                    timeout=BUDGET,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("AI generation timeout. Falling back to canned message.")
+                final_text, tokens_used = ("잠시만요! 답변 생성이 길어져 간단히 안내드려요 🙏", 0)
+            logger.info(f"AI response generated: {final_text[:50]}...")
+            
+            # 데이터베이스가 연결된 경우에만 메시지 저장 시도
+            if not str(conv_id).startswith("temp_"):
+                try:
+                    # 백그라운드에서 메시지 저장
+                    asyncio.create_task(_save_user_message_background(
+                        conv_id, user_text, x_request_id
+                    ))
+                    asyncio.create_task(_save_ai_response_background(
+                        conv_id, final_text, 0, x_request_id  # tokens_used = 0 for now
+                    ))
+                except Exception as save_error:
+                    logger.warning(f"Failed to save messages: {save_error}")
+            
+            # 카카오로 응답 전송
+            return JSONResponse(content={
+                "version": "2.0",
+                "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+            }, media_type="application/json; charset=utf-8")
+            
+        except Exception as ai_error:
+            logger.error(f"AI generation failed: {ai_error}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
+            final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            
+            return JSONResponse(content={
+                "version": "2.0",
+                "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+            }, media_type="application/json; charset=utf-8")
         
     except Exception as e:
-        logger.bind(x_request_id=x_request_id).exception(f"AI generation failed: {e}")
-        final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
-        
-        # 에러 응답도 즉시 반환
+        logger.error(f"Error in skill endpoint: {e}")
+        # 최종 에러 응답
         return JSONResponse(content={
             "version": "2.0",
-            "template": {"outputs":[{"simpleText":{"text": final_text}}]}
-        })
+            "template": {"outputs":[{"simpleText":{"text": "안녕하세요! 무엇을 도와드릴까요?"}}]}
+        }, media_type="application/json; charset=utf-8")
 
 
 @router.post("/test-skill")

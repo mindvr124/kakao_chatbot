@@ -1,5 +1,8 @@
 """메인 FastAPI 애플리케이션"""
 import sys
+import time
+import asyncio
+import httpx
 from fastapi import FastAPI
 from loguru import logger
 
@@ -7,41 +10,40 @@ from loguru import logger
 logger.remove()  # 기본 핸들러 제거
 logger.add(sys.stdout, level="INFO", format="{time} | {level} | {message}")
 
-from .db import init_db, close_db
-from .ai_worker import ai_worker
-from .service import create_prompt_template, get_prompt_template_by_name
-from .db import get_session
+# 요청 시간 예산 (카카오 프록시 5초 대비 안전 마진) 및 전역 HTTPX 클라이언트 선언
+BUDGET: float = 4.0
+ENABLE_CALLBACK: bool = True
+http_client: httpx.AsyncClient | None = None
 
-# 라우터 import
-from .kakao_routes import router as kakao_router
-from .admin_routes import router as admin_router
-from .user_routes import router as user_router
+from app.database.db import init_db, close_db, get_session
+from app.core.ai_worker import ai_worker
+from app.database.service import create_prompt_template, get_prompt_template_by_name
 
 app = FastAPI(title="Kakao AI Chatbot (FastAPI)")
 
-# 라우터 등록
-app.include_router(kakao_router)
-app.include_router(admin_router)
-app.include_router(user_router)
-
-
 @app.on_event("startup")
 async def on_startup():
-    await init_db()
-    logger.info("DB initialized.")
-    
-    # AI 워커 시작
-    await ai_worker.start()
-    logger.info("AI Worker started.")
-    
-    # 기본 프롬프트 템플릿 생성 (없을 경우)
-    async for session in get_session():
-        existing_prompt = await get_prompt_template_by_name(session, "default")
-        if not existing_prompt:
-            await create_prompt_template(
-                session=session,
-                name="default",
-                system_prompt="""당신은 카카오 비즈니스 AI 상담사입니다. 
+    # 전역 HTTP 클라이언트는 DB 성공/실패와 무관하게 먼저 준비
+    global http_client
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=2.0, read=3.0, write=3.0, pool=5.0),
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    )
+
+    # DB는 실패해도 서버는 뜨게
+    try:
+        await init_db()
+        logger.info("DB initialized.")
+
+        # 기본 프롬프트 템플릿 생성 (없을 경우)
+        try:
+            async for session in get_session():
+                existing_prompt = await get_prompt_template_by_name(session, "default")
+                if not existing_prompt:
+                    await create_prompt_template(
+                        session=session,
+                        name="default",
+                        system_prompt="""당신은 카카오 비즈니스 AI 상담사입니다. 
 다음 원칙을 따라 응답해주세요:
 
 1. 친근하고 전문적인 톤으로 대화하세요
@@ -49,11 +51,20 @@ async def on_startup():
 3. 모르는 내용은 솔직히 모른다고 하고, 추가 도움을 제안하세요
 4. 답변은 간결하면서도 충분한 정보를 포함하세요
 5. 한국어로 자연스럽게 대화하세요""",
-                description="기본 상담봇 프롬프트",
-                created_by="system"
-            )
-            logger.info("Default prompt template created")
-        break
+                        description="기본 상담봇 프롬프트",
+                        created_by="system"
+                    )
+                    logger.info("Default prompt template created")
+                break
+        except Exception as e:
+            logger.warning(f"Failed to create default prompt template: {e}")
+    except Exception as e:
+        logger.error(f"Failed to initialize DB: {e}")
+        logger.info("Server will continue without database connection")
+
+    # AI 워커 시작 (DB와 무관)
+    await ai_worker.start()
+    logger.info("AI Worker started.")
 
 
 @app.on_event("shutdown")
@@ -61,10 +72,28 @@ async def on_shutdown():
     # AI 워커 중지
     await ai_worker.stop()
     logger.info("AI Worker stopped.")
-    
+
+    # 전역 HTTP 클라이언트 종료
+    global http_client
+    if http_client:
+        await http_client.aclose()
+
     # 데이터베이스 연결 종료
-    await close_db()
-    logger.info("Database connections closed.")
+    try:
+        await close_db()
+        logger.info("Database connections closed.")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+
+
+# 라우터 import 및 등록 (이벤트 핸들러 정의 후에 등록해도 무방)
+from app.api.kakao_routes import router as kakao_router
+from app.api.admin_routes import router as admin_router
+from app.api.user_routes import router as user_router
+
+app.include_router(kakao_router)
+app.include_router(admin_router)
+app.include_router(user_router)
 
 
 @app.get("/health")
@@ -76,3 +105,9 @@ async def health():
 @app.get("/")
 async def root():
     return {"ok": True, "service": "kakao_chatbot"}
+
+
+@app.post("/")
+async def root_post():
+    """루트 경로 POST 요청 처리 (외부 봇/스캐너 대응)"""
+    return {"error": "Please use /skill endpoint for Kakao chatbot requests"}

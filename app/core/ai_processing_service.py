@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 import uuid
 
-from .models import AIProcessingTask, AIProcessingStatus, Message
-from .ai_service import ai_service
+from app.database.models import AIProcessingTask, AIProcessingStatus, Message
+from app.core.ai_service import ai_service
 
 class AIProcessingService:
     """AI 처리 작업을 비동기로 관리하는 서비스"""

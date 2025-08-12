@@ -1,7 +1,7 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from .models import AppUser, Conversation, Message, PromptTemplate
-from .utils import session_expired
+from app.database.models import AppUser, Conversation, Message, PromptTemplate
+from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
 

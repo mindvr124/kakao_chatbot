@@ -5,18 +5,18 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from .db import get_session
-from .schemas import (
+from app.database.db import get_session
+from app.schemas.schemas import (
     PromptTemplateCreate, PromptTemplateResponse, PromptTemplateUpdate,
     AIProcessingTaskResponse, AIProcessingTaskListResponse, RetryAIProcessingTaskResponse
 )
-from .service import (
+from app.database.service import (
     create_prompt_template, get_prompt_templates, get_prompt_template_by_name, activate_prompt_template
 )
-from .ai_worker import ai_worker
-from .ai_processing_service import ai_processing_service
-from .models import AIProcessingTask, AIProcessingStatus
-from .config import settings
+from app.core.ai_worker import ai_worker
+from app.core.ai_processing_service import ai_processing_service
+from app.database.models import AIProcessingTask, AIProcessingStatus
+from app.config import settings
 
 router = APIRouter(prefix="/admin")
 

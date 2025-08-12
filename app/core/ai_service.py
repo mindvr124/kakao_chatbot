@@ -6,9 +6,9 @@ from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
-from .models import Message, PromptTemplate, Conversation
-from .utils import extract_user_id
-from .config import settings
+from app.database.models import Message, PromptTemplate, Conversation
+from app.utils.utils import extract_user_id
+from app.config import settings
 
 class AIService:
     def __init__(self):
@@ -90,6 +90,41 @@ class AIService:
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
             return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", 0
+
+    async def generate_simple_response(self, user_input: str) -> str:
+        """데이터베이스 없이 간단한 AI 응답을 생성합니다."""
+        try:
+            # API 키가 없으면 기본 응답
+            api_key = os.getenv('OPENAI_API_KEY') or settings.openai_api_key
+            if not self.client or not api_key:
+                return f"안녕하세요! '{user_input}'에 대해 문의해주셔서 감사합니다. 무엇을 도와드릴까요?"
+            
+            # 간단한 시스템 프롬프트
+            system_prompt = """당신은 친근하고 도움이 되는 AI 상담사입니다. 
+한국어로 자연스럽게 대화하고, 사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요."""
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ]
+            
+            logger.info(f"Calling OpenAI API for simple response")
+            
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
+            )
+            
+            ai_response = response.choices[0].message.content
+            logger.info(f"Simple OpenAI response generated")
+            
+            return ai_response
+            
+        except Exception as e:
+            logger.error(f"Error generating simple AI response: {e}")
+            return f"안녕하세요! '{user_input}'에 대해 문의해주셔서 감사합니다. 현재 일시적인 문제가 있어 자세한 답변을 드리지 못하지만, 곧 해결될 예정입니다."
 
 # 전역 AI 서비스 인스턴스
 ai_service = AIService()

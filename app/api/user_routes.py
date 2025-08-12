@@ -4,10 +4,10 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from .db import get_session
-from .schemas import AIProcessingStatusResponse
-from .ai_processing_service import ai_processing_service
-from .models import AIProcessingTask, AIProcessingStatus, Message, MessageRole
+from app.database.db import get_session
+from app.schemas.schemas import AIProcessingStatusResponse
+from app.core.ai_processing_service import ai_processing_service
+from app.database.models import AIProcessingTask, AIProcessingStatus, Message, MessageRole
 
 router = APIRouter(prefix="/user")
 

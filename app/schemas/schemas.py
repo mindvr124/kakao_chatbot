@@ -52,7 +52,8 @@ def callback_waiting_response(message: str = "답변을 생성 중입니다...")
 
 class KakaoBody(BaseModel):
     # 카카오가 보내는 바디를 전부 모델링할 필요는 없음. 쓰는 부분만!
-    userRequest: dict
+    # 스킬 테스트 툴에서 userRequest가 누락될 수 있어 Optional 처리
+    userRequest: Optional[dict] = None
     action: dict | None = None
 
 # 프롬프트 관리용 스키마

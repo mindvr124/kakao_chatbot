@@ -5,9 +5,9 @@ from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from .db import get_session
-from .service import save_message
-from .ai_processing_service import ai_processing_service
+from app.database.db import get_session
+from app.database.service import save_message
+from app.core.ai_processing_service import ai_processing_service
 
 
 async def _save_user_message_background(conv_id: str, user_text: str, request_id: str | None):
@@ -68,7 +68,15 @@ def send_kakao_callback(callback_url, final_answer):
         }
     }
     try:
-        response = requests.post(callback_url, json=callback_data, timeout=10)
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        # 카카오 콜백은 프록시/인증서 이슈가 있을 수 있어, 리다이렉트/검증 설정을 명시적으로 지정
+        response = requests.post(
+            callback_url,
+            json=callback_data,
+            headers=headers,
+            timeout=8,
+            allow_redirects=True,
+        )
         print(f"Callback sent: {response.status_code}")
         logger.info(f"Callback sent successfully: status={response.status_code}")
         return response.status_code == 200

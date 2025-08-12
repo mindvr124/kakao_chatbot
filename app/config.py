@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     # 데이터베이스
     database_url: str = Field(
-        default="postgresql+asyncpg://user:pass@localhost:5432/chatdb",
+        default="postgresql+asyncpg://aicounselor_user:your_secure_password_here@223.130.146.105:5432/aicounselor",
         validation_alias=AliasChoices("DATABASE_URL"),
     )
 

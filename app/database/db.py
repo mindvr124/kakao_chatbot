@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import NullPool
-from .config import settings
+from app.config import settings
 import logging
 
 # 로깅 설정
