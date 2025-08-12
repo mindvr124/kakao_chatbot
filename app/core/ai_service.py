@@ -51,19 +51,26 @@ class AIService:
         return list(reversed(messages))  # 시간 순으로 정렬
 
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> List[dict]:
-        """OpenAI API용 메시지 배열을 구성합니다."""
-        # 프롬프트 템플릿 가져오기
+        """OpenAI API용 메시지 배열을 구성합니다. 최근 대화 히스토리를 포함합니다."""
+        # 프롬프트 템플릿
         prompt_template = await self.get_active_prompt(session, prompt_name)
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
-        
-        # 메시지 배열 구성 (히스토리 없이 최대 속도 최적화)
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # 히스토리 제거로 최대 속도 확보 (각 대화가 독립적)
-        
+
+        messages: List[dict] = [{"role": "system", "content": system_prompt}]
+
+        # 최근 히스토리 포함 (최대 10개 메시지)
+        try:
+            history = await self.get_conversation_history(session, conv_id, limit=10)
+            for m in history:
+                role = (m.role or "user").lower()
+                if role not in ("user", "assistant", "system"):
+                    role = "user"
+                messages.append({"role": role, "content": m.content})
+        except Exception as e:
+            logger.warning(f"Failed to load conversation history for {conv_id}: {e}")
+
         # 현재 사용자 입력 추가
         messages.append({"role": "user", "content": user_input})
-        
         return messages
 
     async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> tuple[str, int]:

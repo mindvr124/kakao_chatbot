@@ -61,6 +61,12 @@ async def skill_endpoint(
         # 2) 콜백 요청이면 즉시 응답 후 비동기 콜백 (DB 이전)
         # 3) 유저 발화 추출 (Optional userRequest 방어)
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
+        previous_id = (
+            (body_dict.get("previousResponseId") if isinstance(body_dict, dict) else None)
+            or (body_dict.get("context") or {}).get("previousResponseId")
+            or (body_dict.get("action") or {}).get("previousResponseId")
+        )
+        trace_id = previous_id or x_request_id
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             # 2-1) 5초 제한 내에서 남은 시간으로 동기 응답 시도 → 성공 시 즉시 응답
@@ -76,6 +82,21 @@ async def skill_endpoint(
                     ),
                     timeout=time_left,
                 )
+                # 동기 응답이 성공해도, 대화 로그는 백그라운드로 저장
+                async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
+                    async for s in get_session():
+                        try:
+                            await upsert_user(s, user_id)
+                            conv = await get_or_create_conversation(s, user_id)
+                            await save_message(s, conv.conv_id, "user", user_text, trace_id)
+                            await save_message(s, conv.conv_id, "assistant", reply_text, trace_id, quick_tokens)
+                            break
+                        except Exception as persist_err:
+                            logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
+                            break
+
+                asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
+
                 return JSONResponse(content={
                     "version": "2.0",
                     "template": {"outputs":[{"simpleText":{"text": quick_text}}]}
@@ -94,6 +115,12 @@ async def skill_endpoint(
                         try:
                             await upsert_user(s, user_id)
                             conv = await get_or_create_conversation(s, user_id)
+                            # 사용자 메시지 먼저 저장
+                            try:
+                                if user_text:
+                                    await save_message(s, conv.conv_id, "user", user_text, trace_id)
+                            except Exception as save_user_err:
+                                logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
                             # AI 생성에 BUDGET 가드
                             final_text, tokens_used = await asyncio.wait_for(
                                 ai_service.generate_response(
@@ -104,7 +131,7 @@ async def skill_endpoint(
                                 ),
                                 timeout=BUDGET,
                             )
-                            await save_message(s, conv.conv_id, "assistant", final_text, request_id, tokens_used)
+                            await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used)
                             break
                         except Exception as inner_e:
                             logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
