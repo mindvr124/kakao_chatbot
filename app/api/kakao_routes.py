@@ -76,12 +76,23 @@ async def skill_endpoint(
             elapsed = time.perf_counter() - t0
             time_left = max(0.2, 4.5 - elapsed)  # 여유 마진 확보
             try:
+                # 가능한 경우 빠르게 실제 conv_id 확보 후 히스토리 포함 응답 생성
+                async def _ensure_quick_conv():
+                    await upsert_user(session, user_id)
+                    conv = await get_or_create_conversation(session, user_id)
+                    return conv.conv_id
+                try:
+                    quick_conv_id = await asyncio.wait_for(_ensure_quick_conv(), timeout=min(1.0, time_left - 0.1))
+                except Exception:
+                    quick_conv_id = f"temp_{user_id}"
+
                 quick_text, quick_tokens = await asyncio.wait_for(
                     ai_service.generate_response(
                         session=session,
-                        conv_id=f"temp_{user_id}",
+                        conv_id=quick_conv_id,
                         user_input=user_text,
-                        prompt_name="default"
+                        prompt_name="default",
+                        user_id=user_id
                     ),
                     timeout=time_left,
                 )
@@ -199,7 +210,7 @@ async def skill_endpoint(
             async def _ensure_conv_main():
                 await upsert_user(session, user_id)
                 return await get_or_create_conversation(session, user_id)
-            conv = await asyncio.wait_for(_ensure_conv_main(), timeout=0.7)
+            conv = await asyncio.wait_for(_ensure_conv_main(), timeout=1.5)
             conv_id = conv.conv_id
         except Exception as db_err:
             logger.warning(f"DB ops failed in immediate path: {db_err}")
@@ -214,7 +225,8 @@ async def skill_endpoint(
                         session=session,
                         conv_id=conv_id,
                         user_input=user_text,
-                        prompt_name="default"
+                        prompt_name="default",
+                        user_id=user_id
                     ),
                     timeout=BUDGET,
                 )

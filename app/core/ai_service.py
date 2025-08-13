@@ -65,7 +65,7 @@ class AIService:
         return messages
 
     @traceable
-    async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> List[dict]:
+    async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
         """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
         prompt_template = await self.get_active_prompt(session, prompt_name)
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
@@ -84,6 +84,7 @@ class AIService:
         except Exception:
             conv_uuid = None
 
+        looked_up_summary = False
         if conv_uuid is not None:
             conversation: Conversation | None = await session.get(Conversation, conv_uuid)
             if conversation:
@@ -94,11 +95,25 @@ class AIService:
                             "role": "system",
                             "content": f"이전 상담 요약:\n{last_summary}"
                         })
+                        looked_up_summary = True
                 except Exception:
                     pass
 
+        # conv_uuid가 없거나 위 조회에 실패했더라도, user_id가 제공되면 사용자 기준으로 요약 시도
+        if not looked_up_summary and user_id:
+            try:
+                last_summary = await get_last_counsel_summary(session, user_id)
+                if last_summary:
+                    messages.append({
+                        "role": "system",
+                        "content": f"이전 상담 요약:\n{last_summary}"
+                    })
+            except Exception:
+                pass
+
         # 히스토리 추가 (너무 길면 최근 N턴만 전송)
         history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
+        # 유효하지 않은 conv이거나 히스토리가 비어 있으면, 직전 사용자 입력만 발화로 포함되므로 히스토리 없음
         MAX_TURNS = 20  # 최근 20 메시지(10왕복)만 모델에 전송
         if len(history_messages) > MAX_TURNS:
             history_messages = history_messages[-MAX_TURNS:]
@@ -117,10 +132,10 @@ class AIService:
         return messages
 
     @traceable
-    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> tuple[str, int]:
+    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> tuple[str, int]:
         """Chat Completions에 전체 히스토리와 요약(있다면)을 포함해 응답을 생성합니다."""
         try:
-            messages = await self.build_messages(session, conv_id, user_input, prompt_name)
+            messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
 
             logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
 
