@@ -245,6 +245,12 @@ async def _summarize_and_close(conv_id: str):
                 logger.warning(f"Summary via fallback generate_response due to chat error: {e}")
                 summary_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default")
             await save_counsel_summary(session, user_id, conv_id, summary_text)
+            # 사용자 누적 요약(UserSummary)도 최신으로 병합 및 포인터 갱신
+            try:
+                from app.core.summary import maybe_rollup_user_summary
+                await maybe_rollup_user_summary(session, user_id, conv_id)
+            except Exception:
+                pass
             logger.info(f"요약 저장 완료 (conv_id={conv_id})")
         finally:
             break

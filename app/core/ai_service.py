@@ -74,7 +74,7 @@ class AIService:
         # 맥락 활용 지시를 명시적으로 추가(템플릿에 없을 수 있으므로 보강)
         messages.append({
             "role": "system",
-            "content": "아래의 이전 요약과 대화 기록을 적극 참고하여, 맥락에 맞는 답변을 제공하세요."
+            "content": "아래의 이전 요약과 대화 기록(요약 이후의 최근 메시지들)을 참고하여, 맥락에 맞는 답변을 제공하세요."
         })
 
         # conv_id가 UUID일 때만 대화/요약 조회
@@ -84,25 +84,33 @@ class AIService:
         except Exception:
             conv_uuid = None
 
-        looked_up_summary = False
+        # 사용자 누적 요약(UserSummary) 우선 사용, 없으면 CounselSummary fallback
+        us_summary: Optional[str] = None
+        target_user_id: Optional[str] = None
+        conversation: Conversation | None = None
         if conv_uuid is not None:
-            conversation: Conversation | None = await session.get(Conversation, conv_uuid)
-            if conversation:
-                try:
-                    last_summary = await get_last_counsel_summary(session, conversation.user_id)
-                    if last_summary:
-                        messages.append({
-                            "role": "system",
-                            "content": f"이전 상담 요약:\n{last_summary}"
-                        })
-                        looked_up_summary = True
-                except Exception:
-                    pass
+            conversation = await session.get(Conversation, conv_uuid)
+            target_user_id = conversation.user_id if conversation else None
+        if not target_user_id:
+            target_user_id = user_id
 
-        # conv_uuid가 없거나 위 조회에 실패했더라도, user_id가 제공되면 사용자 기준으로 요약 시도
-        if not looked_up_summary and user_id:
+        if target_user_id:
             try:
-                last_summary = await get_last_counsel_summary(session, user_id)
+                us = await get_or_init_user_summary(session, target_user_id)
+                if us and us.summary:
+                    us_summary = us.summary
+            except Exception:
+                us_summary = None
+
+        if us_summary:
+            messages.append({
+                "role": "system",
+                "content": f"이전 상담 요약:\n{us_summary}"
+            })
+        else:
+            # Fallback: 최근 CounselSummary 사용
+            try:
+                last_summary = await get_last_counsel_summary(session, target_user_id) if target_user_id else None
                 if last_summary:
                     messages.append({
                         "role": "system",
@@ -112,7 +120,30 @@ class AIService:
                 pass
 
         # 히스토리 추가 (너무 길면 최근 N턴만 전송)
-        history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
+        # 요약 이후의 메시지만 활용하여, 과거 메모리는 자동으로 '비우기' 효과
+        history_messages: List[Message] = []
+        if conv_uuid is not None and conversation is not None:
+            try:
+                from sqlmodel import select
+                from app.database.models import Message as DBMessage
+                since_dt = None
+                try:
+                    us = await get_or_init_user_summary(session, conversation.user_id)
+                    since_dt = us.last_message_created_at if us else None
+                except Exception:
+                    since_dt = None
+
+                stmt = select(DBMessage).where(DBMessage.conv_id == conv_uuid)
+                if since_dt is not None:
+                    stmt = stmt.where(DBMessage.created_at > since_dt)
+                stmt = stmt.order_by(DBMessage.created_at.asc())
+                res = await session.execute(stmt)
+                history_messages = list(res.scalars().all())
+            except Exception:
+                # 폴백: 전체 히스토리 사용
+                history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
+        else:
+            history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
         # 유효하지 않은 conv이거나 히스토리가 비어 있으면, 직전 사용자 입력만 발화로 포함되므로 히스토리 없음
         MAX_TURNS = settings.summary_turn_window  # 최근 N 메시지만 모델에 전송
         if len(history_messages) > MAX_TURNS:
