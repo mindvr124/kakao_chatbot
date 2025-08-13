@@ -14,6 +14,7 @@ from app.core.summary import get_last_counsel_summary, get_or_init_user_summary,
 from app.database.service import save_prompt_log
 import json
 from app.core.observability import traceable
+from app.utils.utils import remove_markdown
 
 class AIService:
     def __init__(self):
@@ -230,6 +231,11 @@ class AIService:
                     pass
 
             content = accumulated
+            # 최종 전송 전 마크다운 제거
+            try:
+                content = remove_markdown(content)
+            except Exception:
+                pass
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
             return content, tokens_used

@@ -8,6 +8,7 @@ import uuid
 
 from app.database.models import AIProcessingTask, AIProcessingStatus, Message
 from app.core.ai_service import ai_service
+from app.utils.utils import remove_markdown
 
 class AIProcessingService:
     """AI 처리 작업을 비동기로 관리하는 서비스"""
@@ -228,7 +229,7 @@ class AIProcessingService:
             ai_message = Message(
                 conv_id=task.conv_id,
                 role="assistant",
-                content=final_text,
+                content=remove_markdown(final_text),
                 request_id=task.request_id,
                 tokens=tokens_used
             )

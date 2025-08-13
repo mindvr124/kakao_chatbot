@@ -13,6 +13,7 @@ import asyncio
 from datetime import datetime
 from app.core.ai_service import ai_service
 from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary, maybe_rollup_user_summary
+from app.utils.utils import remove_markdown
 from app.database.models import Conversation
 
 
@@ -51,7 +52,7 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                 session=session, 
                 conv_id=conv_id, 
                 role="assistant", 
-                content=final_text, 
+                content=remove_markdown(final_text), 
                 request_id=request_id,
                 tokens=tokens_used
             )

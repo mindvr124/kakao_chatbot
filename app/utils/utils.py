@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from app.config import settings
+import re
 
 def session_expired(last_time: datetime, now: datetime | None = None) -> bool:
     now = now or datetime.utcnow()
@@ -74,3 +75,19 @@ def extract_callback_url(kakao_body: dict) -> str | None:
         pass
 
     return deep
+
+def remove_markdown(text: str) -> str:
+    """LLM 응답에서 마크다운 문법을 간단히 제거합니다."""
+    if not isinstance(text, str):
+        return text
+    # 코드 블록 제거
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    # 인라인 코드
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    # 굵게/기울임
+    text = re.sub(r"(\*|_){1,3}([^*_]+)\1{1,3}", r"\2", text)
+    # 제목(#)
+    text = re.sub(r"^#+\s*", "", text, flags=re.MULTILINE)
+    # 링크 문법 [text](url)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    return text.strip()

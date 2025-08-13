@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message
-from app.utils.utils import extract_user_id, extract_callback_url
+from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
 from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity
 from app.core.summary import maybe_rollup_user_summary
@@ -122,7 +122,7 @@ async def skill_endpoint(
                     pass
                 return JSONResponse(content={
                     "version": "2.0",
-                    "template": {"outputs":[{"simpleText":{"text": quick_text}}]}
+                    "template": {"outputs":[{"simpleText":{"text": remove_markdown(quick_text)}}]}
                 }, media_type="application/json; charset=utf-8")
             except Exception:
                 # 시간 내 미완료 → 콜백 즉시 응답으로 폴백
@@ -280,7 +280,7 @@ async def skill_endpoint(
             # 카카오로 응답 전송
             return JSONResponse(content={
                 "version": "2.0",
-                "template": {"outputs":[{"simpleText":{"text": final_text}}]}
+                "template": {"outputs":[{"simpleText":{"text": remove_markdown(final_text)}}]}
             }, media_type="application/json; charset=utf-8")
             
         except Exception as ai_error:
