@@ -1,6 +1,7 @@
 import os
 import asyncio
 from typing import List, Optional
+from uuid import UUID
 from openai import AsyncOpenAI
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,10 +44,18 @@ class AIService:
 
     @traceable
     async def get_conversation_history(self, session: AsyncSession, conv_id) -> List[Message]:
-        """해당 conv_id의 전체 메시지를 시간순으로 반환합니다."""
+        """해당 conv_id의 전체 메시지를 시간순으로 반환합니다. UUID가 아니면 빈 리스트 반환."""
+        try:
+            if isinstance(conv_id, UUID):
+                conv_uuid = conv_id
+            else:
+                conv_uuid = UUID(str(conv_id))
+        except Exception:
+            return []
+
         stmt = (
             select(Message)
-            .where(Message.conv_id == conv_id)
+            .where(Message.conv_id == conv_uuid)
             .order_by(Message.created_at.asc())
         )
         result = await session.execute(stmt)
@@ -66,21 +75,28 @@ class AIService:
             "content": "아래의 이전 요약과 대화 기록을 적극 참고하여, 맥락에 맞는 답변을 제공하세요."
         })
 
-        # conv_id로 사용자 조회 후, 해당 사용자 마지막 요약이 있으면 시스템 컨텍스트로 포함
-        conversation: Conversation | None = await session.get(Conversation, conv_id)
-        if conversation:
-            try:
-                last_summary = await get_last_counsel_summary(session, conversation.user_id)
-                if last_summary:
-                    messages.append({
-                        "role": "system",
-                        "content": f"이전 상담 요약:\n{last_summary}"
-                    })
-            except Exception:
-                pass
+        # conv_id가 UUID일 때만 대화/요약 조회
+        conv_uuid: UUID | None = None
+        try:
+            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+        except Exception:
+            conv_uuid = None
+
+        if conv_uuid is not None:
+            conversation: Conversation | None = await session.get(Conversation, conv_uuid)
+            if conversation:
+                try:
+                    last_summary = await get_last_counsel_summary(session, conversation.user_id)
+                    if last_summary:
+                        messages.append({
+                            "role": "system",
+                            "content": f"이전 상담 요약:\n{last_summary}"
+                        })
+                except Exception:
+                    pass
 
         # 히스토리 추가 (너무 길면 최근 N턴만 전송)
-        history_messages = await self.get_conversation_history(session, conv_id)
+        history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
         MAX_TURNS = 20  # 최근 20 메시지(10왕복)만 모델에 전송
         if len(history_messages) > MAX_TURNS:
             history_messages = history_messages[-MAX_TURNS:]
