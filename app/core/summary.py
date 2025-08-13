@@ -3,7 +3,7 @@ from sqlmodel import select
 from typing import Optional
 from loguru import logger
 
-from app.database.models import Message, Conversation, CounselSummary
+from app.database.models import Message, Conversation, CounselSummary, UserSummary
 
 class SummaryResponse:
     def __init__(self, content: str):
@@ -11,7 +11,7 @@ class SummaryResponse:
 
 def _build_summary_prompt(history: str, summary_text: str) -> list[dict]:
     instruction = (
-        "다음 상담 대화 기록을 요약하세요. 사용자 이름, 상담 이유, 핵심 내용을 중복 없이 간결하게 작성하세요. "
+        "다음 상담 대화 기록을 요약하세요. 사용자 이름, 상담 이유, 핵심 내용을 빠짐 없이 중복이 없도록 작성하세요. "
         "기존 요약이 있다면 삭제하지 말고 덧붙여 업데이트하세요. 무의미한 대화나 인사만 있는 경우에는 원문을 그대로 작성하세요."
     )
     user_content = (
@@ -121,6 +121,71 @@ async def get_last_counsel_summary(session: AsyncSession, user_id: str) -> Optio
     res = await session.execute(stmt)
     s = res.scalar_one_or_none()
     return s.content if s else None
+
+async def get_or_init_user_summary(session: AsyncSession, user_id: str) -> UserSummary:
+    us = await session.get(UserSummary, user_id)
+    if us is None:
+        us = UserSummary(user_id=user_id, summary=None, last_message_created_at=None)
+        session.add(us)
+        await session.commit()
+        await session.refresh(us)
+    return us
+
+async def maybe_rollup_user_summary(
+    session: AsyncSession,
+    user_id: str,
+    conv_id,
+    new_messages: list[Message] | None = None,
+) -> None:
+    """사용자 단위 20턴 윈도우 요약을 집계한다.
+    - 최근 대화에서 신규 메시지 수가 설정 임계치 이상일 때, 기존 요약과 합쳐서 업데이트
+    - 중복 없이 합치도록 프롬프트에 지시
+    """
+    from app.config import settings
+    MAX_TURNS = settings.summary_turn_window
+
+    # 최근 대화 전체 메시지 조회 (간단 구현)
+    stmt = (
+        select(Message)
+        .where(Message.conv_id == conv_id)
+        .order_by(Message.created_at.asc())
+    )
+    res = await session.execute(stmt)
+    msgs = res.scalars().all()
+    if not msgs:
+        return
+
+    # 최근 MAX_TURNS 메시지
+    recent = msgs[-MAX_TURNS:]
+
+    # 사용자 단위 기존 요약 로드
+    us = await get_or_init_user_summary(session, user_id)
+    existing_summary = us.summary or ""
+
+    # 프롬프트 구성 및 요약 생성
+    history_text = []
+    for m in recent:
+        tag = "[사용자]" if str(m.role) == "user" else ("[상담사]" if str(m.role) == "assistant" else "[시스템]")
+        history_text.append(f"{tag} {m.content}")
+    history_text = "\n".join(history_text)
+
+    from app.core.ai_service import ai_service
+    try:
+        prompt = (
+            "아래 최근 대화(MAX_TURNS) 요약을 기존 사용자 요약과 중복 없이 병합하세요.\n"
+            "- 기존 요약의 중요한 내용은 유지\n- 중복 문장은 제거\n- 핵심만 간결히\n"
+            f"\n[기존 사용자 요약]\n{existing_summary}\n\n[최근 대화]\n{history_text}"
+        )
+        merged_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default", user_id)
+    except Exception:
+        return
+
+    # 사용자 요약과 마지막 메시지 시간 갱신
+    us.summary = (merged_text or existing_summary).strip()
+    us.last_message_created_at = msgs[-1].created_at
+    from datetime import datetime
+    us.updated_at = datetime.utcnow()
+    await session.commit()
 
 async def get_counsel_summary_by_conv(session: AsyncSession, conv_id) -> Optional[CounselSummary]:
     stmt = (

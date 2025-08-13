@@ -12,7 +12,7 @@ from loguru import logger
 import asyncio
 from datetime import datetime
 from app.core.ai_service import ai_service
-from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary
+from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary, maybe_rollup_user_summary
 from app.database.models import Conversation
 
 
@@ -56,6 +56,17 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                 tokens=tokens_used
             )
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
+            try:
+                # conv_id로 user_id 조회 후 사용자 요약 롤업
+                try:
+                    from app.database.models import Conversation
+                    conv = await session.get(Conversation, conv_id)
+                    if conv:
+                        await maybe_rollup_user_summary(session, conv.user_id, conv_id)
+                except Exception:
+                    pass
+            finally:
+                pass
             try:
                 update_last_activity(conv_id)
             finally:

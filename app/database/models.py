@@ -87,3 +87,10 @@ class PromptLog(SQLModel, table=True):
     max_tokens: int | None = None
     messages_json: str  # JSON 직렬화된 messages
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+class UserSummary(SQLModel, table=True):
+    """사용자 단위 집계 요약 및 마지막 요약 지점 트래킹"""
+    user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
+    summary: Optional[str] = None
+    last_message_created_at: Optional[datetime] = None
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

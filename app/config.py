@@ -20,10 +20,15 @@ class Settings(BaseSettings):
     openai_api_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY"))
     openai_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("OPENAI_MODEL"))  # 더 빠른 모델
     openai_temperature: float = Field(default=0.1, validation_alias=AliasChoices("OPENAI_TEMPERATURE"))  # 더 빠른 결정
-    openai_max_tokens: int = Field(default=150, validation_alias=AliasChoices("OPENAI_MAX_TOKENS"))  # 최대 속도를 위한 짧은 응답
+    openai_max_tokens: int = Field(default=150, validation_alias=AliasChoices("OPENAI_MAX_TOKENS"))  # 기본 응답 길이
+    openai_auto_continue: bool = Field(default=True, validation_alias=AliasChoices("OPENAI_AUTO_CONTINUE"))
+    openai_auto_continue_max_segments: int = Field(default=3, validation_alias=AliasChoices("OPENAI_AUTO_CONTINUE_MAX_SEGMENTS"))
+    openai_dynamic_max_tokens: bool = Field(default=True, validation_alias=AliasChoices("OPENAI_DYNAMIC_MAX_TOKENS"))
+    openai_dynamic_max_tokens_cap: int = Field(default=800, validation_alias=AliasChoices("OPENAI_DYNAMIC_MAX_TOKENS_CAP"))
 
     # 세션/서버
     session_timeout_minutes: int = Field(default=30, validation_alias=AliasChoices("SESSION_TIMEOUT_MINUTES"))
+    summary_turn_window: int = Field(default=20, validation_alias=AliasChoices("SUMMARY_TURN_WINDOW"))
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT"))
     log_level: str = Field(default="INFO", validation_alias=AliasChoices("LOG_LEVEL"))
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))

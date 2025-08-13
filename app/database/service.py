@@ -1,6 +1,6 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import AppUser, Conversation, Message, PromptTemplate, ResponseState, PromptLog
+from app.database.models import AppUser, Conversation, Message, PromptTemplate, ResponseState, PromptLog, UserSummary
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
@@ -15,7 +15,9 @@ async def upsert_user(session: AsyncSession, user_id: str) -> AppUser:
     return user
 
 async def get_or_create_conversation(session: AsyncSession, user_id: str) -> Conversation:
-    # 최근 대화 하나 조회
+    """항상 최신 대화를 재사용. 없으면 새로 생성.
+    기존의 세션 타임아웃 기반 신규 생성은 제거한다.
+    """
     stmt = (
         select(Conversation)
         .where(Conversation.user_id == user_id)
@@ -30,16 +32,6 @@ async def get_or_create_conversation(session: AsyncSession, user_id: str) -> Con
         session.add(conv)
         await session.commit()
         await session.refresh(conv)
-        return conv
-
-    # 세션 타임아웃 체크
-    # 최근 메시지 시간을 기준으로도 가능하지만, 간단히 started_at 사용
-    if session_expired(conv.started_at):
-        conv = Conversation(user_id=user_id)
-        session.add(conv)
-        await session.commit()
-        await session.refresh(conv)
-
     return conv
 
 async def save_message(

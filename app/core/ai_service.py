@@ -10,7 +10,7 @@ from loguru import logger
 from app.database.models import Message, PromptTemplate, Conversation
 from app.utils.utils import extract_user_id
 from app.config import settings
-from app.core.summary import get_last_counsel_summary
+from app.core.summary import get_last_counsel_summary, get_or_init_user_summary, maybe_rollup_user_summary
 from app.database.service import save_prompt_log
 import json
 from app.core.observability import traceable
@@ -114,7 +114,7 @@ class AIService:
         # 히스토리 추가 (너무 길면 최근 N턴만 전송)
         history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
         # 유효하지 않은 conv이거나 히스토리가 비어 있으면, 직전 사용자 입력만 발화로 포함되므로 히스토리 없음
-        MAX_TURNS = 20  # 최근 20 메시지(10왕복)만 모델에 전송
+        MAX_TURNS = settings.summary_turn_window  # 최근 N 메시지만 모델에 전송
         if len(history_messages) > MAX_TURNS:
             history_messages = history_messages[-MAX_TURNS:]
         for m in history_messages:
@@ -146,15 +146,59 @@ class AIService:
             except Exception:
                 pass
 
+            # 동적 max_tokens 산정
+            max_tokens = self.max_tokens
+            if settings.openai_dynamic_max_tokens:
+                try:
+                    # 매우 단순한 휴리스틱: 입력 길이 기반 스케일링
+                    user_len = sum(len(m.get("content") or "") for m in messages)
+                    scaled = min(settings.openai_dynamic_max_tokens_cap, max(self.max_tokens, int(user_len * 0.1)))
+                    max_tokens = scaled
+                except Exception:
+                    pass
+
+            # 1차 호출
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=self.temperature,
-                max_tokens=self.max_tokens
+                max_tokens=max_tokens,
             )
 
-            content = response.choices[0].message.content
+            content = response.choices[0].message.content or ""
             tokens_used = response.usage.total_tokens if response.usage else 0
+
+            # 잘림(unfinished) 감지 및 이어쓰기
+            def _is_truncated(resp) -> bool:
+                try:
+                    finish_reason = resp.choices[0].finish_reason
+                    return str(finish_reason).lower() in ("length", "content_filter")
+                except Exception:
+                    return False
+
+            accumulated = content
+            segments = 0
+            last_resp = response
+            while settings.openai_auto_continue and _is_truncated(last_resp) and segments < settings.openai_auto_continue_max_segments:
+                segments += 1
+                follow_messages = messages + [
+                    {"role": "assistant", "content": accumulated[-2000:]},
+                    {"role": "user", "content": "이어서 계속 작성해 주세요."},
+                ]
+                last_resp = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=follow_messages,
+                    temperature=self.temperature,
+                    max_tokens=max_tokens,
+                )
+                more = last_resp.choices[0].message.content or ""
+                accumulated += ("\n" + more if more else "")
+                try:
+                    tokens_used += last_resp.usage.total_tokens if last_resp.usage else 0
+                except Exception:
+                    pass
+
+            content = accumulated
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
             return content, tokens_used

@@ -11,6 +11,7 @@ from app.database.service import upsert_user, get_or_create_conversation, save_m
 from app.utils.utils import extract_user_id, extract_callback_url
 from app.core.ai_service import ai_service
 from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity
+from app.core.summary import maybe_rollup_user_summary
 from app.main import http_client, BUDGET, ENABLE_CALLBACK
 import time
 import asyncio
@@ -104,6 +105,10 @@ async def skill_endpoint(
                             conv = await get_or_create_conversation(s, user_id)
                             await save_message(s, conv.conv_id, "user", user_text, trace_id)
                             await save_message(s, conv.conv_id, "assistant", reply_text, trace_id, quick_tokens)
+                            try:
+                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
+                            except Exception:
+                                pass
                             break
                         except Exception as persist_err:
                             logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
@@ -153,6 +158,10 @@ async def skill_endpoint(
                                 timeout=BUDGET,
                             )
                             await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used)
+                            try:
+                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
+                            except Exception:
+                                pass
                             break
                         except Exception as inner_e:
                             logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
