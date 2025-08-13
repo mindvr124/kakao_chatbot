@@ -11,6 +11,8 @@ from app.database.models import Message, PromptTemplate, Conversation
 from app.utils.utils import extract_user_id
 from app.config import settings
 from app.core.summary import get_last_counsel_summary
+from app.database.service import save_prompt_log
+import json
 from app.core.observability import traceable
 
 class AIService:
@@ -121,6 +123,13 @@ class AIService:
             messages = await self.build_messages(session, conv_id, user_input, prompt_name)
 
             logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
+
+            # 프롬프트 로깅 (비차단)
+            try:
+                messages_json = json.dumps(messages, ensure_ascii=False)
+                await save_prompt_log(session, conv_id, messages_json, self.model, prompt_name, self.temperature, self.max_tokens, None)
+            except Exception:
+                pass
 
             response = await self.client.chat.completions.create(
                 model=self.model,

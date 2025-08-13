@@ -75,3 +75,15 @@ class CounselSummary(SQLModel, table=True):
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
     content: str
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+class PromptLog(SQLModel, table=True):
+    """모델 호출 시 최종 프롬프트(메시지 배열)와 파라미터를 저장"""
+    log_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
+    request_id: str | None = Field(default=None, index=True)
+    model: str | None = None
+    prompt_name: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    messages_json: str  # JSON 직렬화된 messages
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
