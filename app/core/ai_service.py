@@ -9,6 +9,8 @@ from loguru import logger
 from app.database.models import Message, PromptTemplate, Conversation
 from app.utils.utils import extract_user_id
 from app.config import settings
+from app.core.summary import get_last_counsel_summary
+from app.core.observability import traceable
 
 class AIService:
     def __init__(self):
@@ -26,6 +28,7 @@ class AIService:
         self.max_tokens = settings.openai_max_tokens
         self.default_system_prompt = """당신은 AI 심리 상담사입니다. 친근하고 공감적인 톤으로 간결하게 답변하세요."""
 
+    @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
         """활성화된 프롬프트 템플릿을 가져옵니다."""
         stmt = (
@@ -38,62 +41,73 @@ class AIService:
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_conversation_history(self, session: AsyncSession, conv_id, limit: int = 10) -> List[Message]:
-        """대화 히스토리를 가져옵니다."""
+    @traceable
+    async def get_conversation_history(self, session: AsyncSession, conv_id) -> List[Message]:
+        """해당 conv_id의 전체 메시지를 시간순으로 반환합니다."""
         stmt = (
             select(Message)
             .where(Message.conv_id == conv_id)
-            .order_by(Message.created_at.desc())
-            .limit(limit)
+            .order_by(Message.created_at.asc())
         )
         result = await session.execute(stmt)
         messages = result.scalars().all()
-        return list(reversed(messages))  # 시간 순으로 정렬
+        return messages
 
+    @traceable
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> List[dict]:
-        """OpenAI API용 메시지 배열을 구성합니다. 최근 대화 히스토리를 포함합니다."""
-        # 프롬프트 템플릿
+        """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
         prompt_template = await self.get_active_prompt(session, prompt_name)
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
 
         messages: List[dict] = [{"role": "system", "content": system_prompt}]
 
-        # 최근 히스토리 포함 (최대 10개 메시지)
-        try:
-            history = await self.get_conversation_history(session, conv_id, limit=10)
-            for m in history:
-                role = (m.role or "user").lower()
-                if role not in ("user", "assistant", "system"):
-                    role = "user"
-                messages.append({"role": role, "content": m.content})
-        except Exception as e:
-            logger.warning(f"Failed to load conversation history for {conv_id}: {e}")
+        # conv_id로 사용자 조회 후, 해당 사용자 마지막 요약이 있으면 시스템 컨텍스트로 포함
+        conversation: Conversation | None = await session.get(Conversation, conv_id)
+        if conversation:
+            try:
+                last_summary = await get_last_counsel_summary(session, conversation.user_id)
+                if last_summary:
+                    messages.append({
+                        "role": "system",
+                        "content": f"이전 상담 요약:\n{last_summary}"
+                    })
+            except Exception:
+                pass
+
+        # 히스토리 추가
+        history_messages = await self.get_conversation_history(session, conv_id)
+        for m in history_messages:
+            role = str(m.role)
+            if role not in ("user", "assistant", "system"):
+                role = "user" if role.lower().startswith("user") else "assistant"
+            messages.append({"role": role, "content": m.content})
 
         # 현재 사용자 입력 추가
         messages.append({"role": "user", "content": user_input})
+
         return messages
 
+    @traceable
     async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default") -> tuple[str, int]:
-        """AI 응답을 생성합니다."""
+        """Chat Completions에 전체 히스토리와 요약(있다면)을 포함해 응답을 생성합니다."""
         try:
             messages = await self.build_messages(session, conv_id, user_input, prompt_name)
-            
-            logger.info(f"Calling OpenAI API with {len(messages)} messages")
-            
+
+            logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
+
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens
             )
-            
+
             content = response.choices[0].message.content
             tokens_used = response.usage.total_tokens if response.usage else 0
-            
+
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
-            
             return content, tokens_used
-            
+
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
             return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", 0

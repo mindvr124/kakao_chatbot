@@ -8,6 +8,12 @@ from sqlalchemy import select
 from app.database.db import get_session
 from app.database.service import save_message
 from app.core.ai_processing_service import ai_processing_service
+from loguru import logger
+import asyncio
+from datetime import datetime
+from app.core.ai_service import ai_service
+from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary
+from app.database.models import Conversation
 
 
 async def _save_user_message_background(conv_id: str, user_text: str, request_id: str | None):
@@ -25,7 +31,10 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
                 request_id=request_id
             )
             logger.bind(x_request_id=request_id).info(f"User message saved successfully")
-            break
+            try:
+                update_last_activity(conv_id)
+            finally:
+                break
             
     except Exception as e:
         logger.bind(x_request_id=request_id).exception(f"Failed to save user message in background: {e}")
@@ -47,7 +56,10 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                 tokens=tokens_used
             )
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
-            break
+            try:
+                update_last_activity(conv_id)
+            finally:
+                break
             
     except Exception as e:
         logger.bind(x_request_id=request_id).exception(f"Failed to save AI response in background: {e}")
@@ -158,3 +170,70 @@ async def _process_ai_background(task_id: str, request_id: str | None):
             
     except Exception as e:
         logger.bind(x_request_id=request_id).exception(f"Background AI processing error for task {task_id}: {e}")
+
+# --- 세션 비활성 감시 및 요약 저장 ---
+_last_activity_map: dict[str, datetime] = {}
+_watcher_task = None
+_inactivity_seconds = 120  # 2분
+
+def update_last_activity(conv_id: str | None):
+    if not conv_id:
+        return
+    _last_activity_map[str(conv_id)] = datetime.utcnow()
+
+async def _watch_sessions_loop():
+    global _watcher_task
+    try:
+        while True:
+            now = datetime.utcnow()
+            stale = [cid for cid, ts in list(_last_activity_map.items()) if (now - ts).total_seconds() > _inactivity_seconds]
+            for conv_id in stale:
+                try:
+                    await _summarize_and_close(conv_id)
+                except Exception as e:
+                    logger.warning(f"Session summarize failed for {conv_id}: {e}")
+                finally:
+                    _last_activity_map.pop(conv_id, None)
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        return
+
+async def _summarize_and_close(conv_id: str):
+    async for session in get_session():
+        try:
+            conv: Conversation | None = await session.get(Conversation, conv_id)
+            if not conv:
+                return
+            user_id = conv.user_id
+            full_history = await load_full_history(session, conv_id)
+            last_summary = await get_last_counsel_summary(session, user_id)
+            summary_instruction = (
+                "다음 대화 기록을 요약하세요. 사용자 이름, 상담 이유, 핵심 내용을 중복 없이 간결하게.\n"
+                "기존 요약이 있다면 삭제하지 말고 덧붙여 업데이트. 무의미한 대화는 원문 유지."
+            )
+            prompt = f"{summary_instruction}\n\n[이전 요약]\n{last_summary or ''}\n\n[대화]\n{full_history}"
+            from app.config import settings
+            try:
+                response = await ai_service.client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=[
+                        {"role": "system", "content": "당신은 상담 대화를 정확히 요약하는 비서입니다."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.2,
+                    max_tokens=300
+                )
+                summary_text = response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"Summary via fallback generate_response due to chat error: {e}")
+                summary_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default")
+            await save_counsel_summary(session, user_id, conv_id, summary_text)
+            logger.info(f"요약 저장 완료 (conv_id={conv_id})")
+        finally:
+            break
+
+async def ensure_watcher_started():
+    global _watcher_task
+    if _watcher_task is None or _watcher_task.done():
+        _watcher_task = asyncio.create_task(_watch_sessions_loop())
+        logger.info("Session watcher started")

@@ -60,3 +60,18 @@ class PromptTemplate(SQLModel, table=True):
     description: Optional[str] = None  # 프롬프트 설명
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     created_by: Optional[str] = None  # 생성자
+
+class ResponseState(SQLModel, table=True):
+    """대화별로 OpenAI Responses API의 마지막 response_id를 저장"""
+    conv_id: UUID = Field(primary_key=True, foreign_key="conversation.conv_id")
+    last_response_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: Optional[datetime] = None
+
+class CounselSummary(SQLModel, table=True):
+    """대화 요약 저장 테이블"""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: str = Field(foreign_key="appuser.user_id", index=True)
+    conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)

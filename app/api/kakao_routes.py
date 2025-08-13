@@ -10,7 +10,7 @@ from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message
 from app.utils.utils import extract_user_id, extract_callback_url
 from app.core.ai_service import ai_service
-from app.core.background_tasks import _save_user_message_background, _save_ai_response_background
+from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity
 from app.main import http_client, BUDGET, ENABLE_CALLBACK
 import time
 import asyncio
@@ -61,12 +61,8 @@ async def skill_endpoint(
         # 2) 콜백 요청이면 즉시 응답 후 비동기 콜백 (DB 이전)
         # 3) 유저 발화 추출 (Optional userRequest 방어)
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
-        previous_id = (
-            (body_dict.get("previousResponseId") if isinstance(body_dict, dict) else None)
-            or (body_dict.get("context") or {}).get("previousResponseId")
-            or (body_dict.get("action") or {}).get("previousResponseId")
-        )
-        trace_id = previous_id or x_request_id
+        # trace_id는 X-Request-ID만 사용 (메모리/대화 히스토리 기능 롤백)
+        trace_id = x_request_id
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             # 2-1) 5초 제한 내에서 남은 시간으로 동기 응답 시도 → 성공 시 즉시 응답
@@ -97,6 +93,10 @@ async def skill_endpoint(
 
                 asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
 
+                try:
+                    update_last_activity(f"temp_{user_id}")
+                except Exception:
+                    pass
                 return JSONResponse(content={
                     "version": "2.0",
                     "template": {"outputs":[{"simpleText":{"text": quick_text}}]}
@@ -178,6 +178,10 @@ async def skill_endpoint(
 
             asyncio.create_task(_handle_callback_full(callback_url, user_id, user_text, x_request_id))
 
+            try:
+                update_last_activity(f"temp_{user_id}")
+            except Exception:
+                pass
             return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
 
         # 4) 즉시응답 경로만 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
@@ -220,6 +224,11 @@ async def skill_endpoint(
                 except Exception as save_error:
                     logger.warning(f"Failed to save messages: {save_error}")
             
+            # 액티비티 업데이트
+            try:
+                update_last_activity(conv_id)
+            except Exception:
+                pass
             # 카카오로 응답 전송
             return JSONResponse(content={
                 "version": "2.0",

@@ -1,6 +1,6 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import AppUser, Conversation, Message, PromptTemplate
+from app.database.models import AppUser, Conversation, Message, PromptTemplate, ResponseState
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
@@ -140,3 +140,21 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
     prompt.is_active = True
     await session.commit()
     return True
+
+async def get_response_state(session: AsyncSession, conv_id) -> ResponseState | None:
+    stmt = select(ResponseState).where(ResponseState.conv_id == conv_id)
+    res = await session.execute(stmt)
+    return res.scalar_one_or_none()
+
+async def upsert_response_state(session: AsyncSession, conv_id, last_response_id: str | None) -> ResponseState:
+    state = await session.get(ResponseState, conv_id)
+    now = datetime.utcnow()
+    if state is None:
+        state = ResponseState(conv_id=conv_id, last_response_id=last_response_id, created_at=now, updated_at=now)
+        session.add(state)
+    else:
+        state.last_response_id = last_response_id
+        state.updated_at = now
+    await session.commit()
+    await session.refresh(state)
+    return state
