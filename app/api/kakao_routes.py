@@ -19,6 +19,7 @@ router = APIRouter()
 
 
 @router.post("/skill")
+@router.post("/skill/")
 async def skill_endpoint(
     request: Request,
     session: AsyncSession = Depends(get_session)
@@ -39,8 +40,9 @@ async def skill_endpoint(
             body_dict = await request.json()
             if not isinstance(body_dict, dict):
                 body_dict = {}
-        except Exception:
-            # JSON 파싱 실패 시에도 빈 바디로 진행해 400 방지
+        except Exception as parse_err:
+            # JSON 파싱 실패 시에도 빈 바디로 진행해 400 방지 + 로깅 강화
+            logger.warning(f"JSON parse failed: {parse_err}")
             body_dict = {}
         
         # 디버깅: 받은 데이터 로깅
@@ -63,6 +65,11 @@ async def skill_endpoint(
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
         # trace_id는 X-Request-ID만 사용 (메모리/대화 히스토리 기능 롤백)
         trace_id = x_request_id
+        if not isinstance(user_text, str):
+            user_text = str(user_text or "")
+        if not user_text:
+            # 카카오 스펙 검사 시 빈 발화로 호출될 수 있어 기본값 제공
+            user_text = "안녕하세요"
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             # 2-1) 5초 제한 내에서 남은 시간으로 동기 응답 시도 → 성공 시 즉시 응답
@@ -113,8 +120,11 @@ async def skill_endpoint(
                     # 내부에서 독립 세션으로 모든 무거운 작업 처리
                     async for s in get_session():
                         try:
-                            await upsert_user(s, user_id)
-                            conv = await get_or_create_conversation(s, user_id)
+                            # DB 작업은 타임아웃 가드로 감쌉니다 (카카오 5초 제한 보호)
+                            async def _ensure_conv():
+                                await upsert_user(s, user_id)
+                                return await get_or_create_conversation(s, user_id)
+                            conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
                             # 사용자 메시지 먼저 저장
                             try:
                                 if user_text:
@@ -186,8 +196,10 @@ async def skill_endpoint(
 
         # 4) 즉시응답 경로만 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
         try:
-            await upsert_user(session, user_id)
-            conv = await get_or_create_conversation(session, user_id)
+            async def _ensure_conv_main():
+                await upsert_user(session, user_id)
+                return await get_or_create_conversation(session, user_id)
+            conv = await asyncio.wait_for(_ensure_conv_main(), timeout=0.7)
             conv_id = conv.conv_id
         except Exception as db_err:
             logger.warning(f"DB ops failed in immediate path: {db_err}")
@@ -247,11 +259,12 @@ async def skill_endpoint(
             }, media_type="application/json; charset=utf-8")
         
     except Exception as e:
-        logger.error(f"Error in skill endpoint: {e}")
-        # 최종 에러 응답
+        logger.exception(f"Error in skill endpoint: {e}")
+        # 카카오 스펙 준수 기본 본문과 함께 200 OK로 내려 400 회피
+        safe_text = "일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
         return JSONResponse(content={
             "version": "2.0",
-            "template": {"outputs":[{"simpleText":{"text": "안녕하세요! 무엇을 도와드릴까요?"}}]}
+            "template": {"outputs":[{"simpleText":{"text": safe_text}}]}
         }, media_type="application/json; charset=utf-8")
 
 
