@@ -223,18 +223,33 @@ async def skill_endpoint(
                 final_text, tokens_used = ("잠시만요! 답변 생성이 길어져 간단히 안내드려요 🙏", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
             
-            # 데이터베이스가 연결된 경우에만 메시지 저장 시도
-            if not str(conv_id).startswith("temp_"):
-                try:
-                    # 백그라운드에서 메시지 저장
+            # 메시지 저장 시도 (DB 장애 등으로 temp일 수 있음)
+            try:
+                if not str(conv_id).startswith("temp_"):
+                    # 기존 방식: conv_id가 유효할 때 바로 저장
                     asyncio.create_task(_save_user_message_background(
                         conv_id, user_text, x_request_id
                     ))
                     asyncio.create_task(_save_ai_response_background(
-                        conv_id, final_text, 0, x_request_id  # tokens_used = 0 for now
+                        conv_id, final_text, 0, x_request_id
                     ))
-                except Exception as save_error:
-                    logger.warning(f"Failed to save messages: {save_error}")
+                else:
+                    # temp_* 인 경우에도 백그라운드에서 정식 conv 생성 후 저장 시도
+                    async def _persist_when_db_ready(user_id: str, user_text: str, reply_text: str, request_id: str | None):
+                        async for s in get_session():
+                            try:
+                                await upsert_user(s, user_id)
+                                conv = await get_or_create_conversation(s, user_id)
+                                if user_text:
+                                    await save_message(s, conv.conv_id, "user", user_text, request_id)
+                                await save_message(s, conv.conv_id, "assistant", reply_text, request_id)
+                                break
+                            except Exception as persist_err:
+                                logger.bind(x_request_id=request_id).warning(f"Persist after temp conv failed: {persist_err}")
+                                break
+                    asyncio.create_task(_persist_when_db_ready(user_id, user_text, final_text, x_request_id))
+            except Exception as save_error:
+                logger.warning(f"Failed to schedule message persistence: {save_error}")
             
             # 액티비티 업데이트
             try:

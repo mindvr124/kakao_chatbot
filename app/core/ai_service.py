@@ -26,7 +26,7 @@ class AIService:
         self.model = settings.openai_model
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
-        self.default_system_prompt = """당신은 AI 심리 상담사입니다. 친근하고 공감적인 톤으로 간결하게 답변하세요."""
+        self.default_system_prompt = """당신은 전문 AI 심리상담가입니다. 친근하고 공감적인 톤으로 간결하게 답변하세요. 지금까지의 대화 내용과 아래 요약을 우선 참고하여, 맥락에 맞게 대화를 이어가세요."""
 
     @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
@@ -60,6 +60,11 @@ class AIService:
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
 
         messages: List[dict] = [{"role": "system", "content": system_prompt}]
+        # 맥락 활용 지시를 명시적으로 추가(템플릿에 없을 수 있으므로 보강)
+        messages.append({
+            "role": "system",
+            "content": "아래의 이전 요약과 대화 기록을 적극 참고하여, 맥락에 맞는 답변을 제공하세요."
+        })
 
         # conv_id로 사용자 조회 후, 해당 사용자 마지막 요약이 있으면 시스템 컨텍스트로 포함
         conversation: Conversation | None = await session.get(Conversation, conv_id)
@@ -74,13 +79,19 @@ class AIService:
             except Exception:
                 pass
 
-        # 히스토리 추가
+        # 히스토리 추가 (너무 길면 최근 N턴만 전송)
         history_messages = await self.get_conversation_history(session, conv_id)
+        MAX_TURNS = 20  # 최근 20 메시지(10왕복)만 모델에 전송
+        if len(history_messages) > MAX_TURNS:
+            history_messages = history_messages[-MAX_TURNS:]
         for m in history_messages:
-            role = str(m.role)
-            if role not in ("user", "assistant", "system"):
-                role = "user" if role.lower().startswith("user") else "assistant"
-            messages.append({"role": role, "content": m.content})
+            # Enum은 value로 안전하게 추출
+            role_value = getattr(m.role, "value", None) or (m.role if isinstance(m.role, str) else str(m.role))
+            role_value = str(role_value).lower()
+            if role_value not in ("user", "assistant", "system"):
+                # 예상치 못한 값 방어: 기본은 user/assistant로 폴백
+                role_value = "user" if "user" in role_value else "assistant"
+            messages.append({"role": role_value, "content": m.content})
 
         # 현재 사용자 입력 추가
         messages.append({"role": "user", "content": user_input})
