@@ -18,6 +18,7 @@ http_client: httpx.AsyncClient | None = None
 from app.database.db import init_db, close_db, get_session
 from app.core.ai_worker import ai_worker
 from app.database.service import create_prompt_template, get_prompt_template_by_name
+from app.core.background_tasks import ensure_watcher_started
 
 app = FastAPI(title="Kakao AI Chatbot (FastAPI)")
 
@@ -66,6 +67,11 @@ async def on_startup():
     # AI 워커 시작 (DB와 무관)
     await ai_worker.start()
     logger.info("AI Worker started.")
+    # 세션 비활성 워처 시작
+    try:
+        await ensure_watcher_started()
+    except Exception as e:
+        logger.warning(f"Failed to start session watcher: {e}")
 
 
 @app.on_event("shutdown")

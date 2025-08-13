@@ -177,7 +177,13 @@ _watcher_task = None
 _inactivity_seconds = 120  # 2분
 
 def update_last_activity(conv_id: str | None):
+    """유효한 UUID conv_id만 기록. temp_* 등은 무시"""
     if not conv_id:
+        return
+    try:
+        from uuid import UUID
+        _ = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+    except Exception:
         return
     _last_activity_map[str(conv_id)] = datetime.utcnow()
 
