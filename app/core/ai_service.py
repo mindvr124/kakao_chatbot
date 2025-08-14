@@ -133,7 +133,15 @@ class AIService:
         target_user_id: Optional[str] = user_id
         conversation: Conversation | None = None
         if not target_user_id and conv_uuid is not None:
-            conversation = await session.get(Conversation, conv_uuid)
+            try:
+                conversation = await session.get(Conversation, conv_uuid)
+            except Exception:
+                try:
+                    await session.rollback()
+                    conversation = await session.get(Conversation, conv_uuid)
+                except Exception as e:
+                    logger.warning(f"build_messages get(Conversation) failed after rollback: {e}")
+                    conversation = None
             target_user_id = conversation.user_id if conversation else None
 
         has_user_summary = False
@@ -143,8 +151,15 @@ class AIService:
                 us = await get_or_init_user_summary(session, target_user_id)
                 if us and us.summary:
                     user_summary_text = us.summary
-            except Exception:
-                has_user_summary = False
+            except Exception as e:
+                try:
+                    await session.rollback()
+                    us = await get_or_init_user_summary(session, target_user_id)
+                    if us and us.summary:
+                        user_summary_text = us.summary
+                except Exception:
+                    logger.warning(f"get_or_init_user_summary failed after rollback: {e}")
+                    user_summary_text = None
 
         # 요약이 존재하면 무조건 포함 (공백 제거 후 판단)
         summary_text_clean = (user_summary_text or "").strip()
@@ -159,10 +174,31 @@ class AIService:
             except Exception:
                 pass
         else:
+            # CounselSummary 폴백 시도
+            fallback_summary = None
             try:
-                logger.info(f"No user summary found for user_id={target_user_id}; using history only")
-            except Exception:
-                pass
+                fallback_summary = await get_last_counsel_summary(session, target_user_id or "")
+            except Exception as e:
+                try:
+                    await session.rollback()
+                    fallback_summary = await get_last_counsel_summary(session, target_user_id or "")
+                except Exception:
+                    logger.warning(f"get_last_counsel_summary failed after rollback: {e}")
+                    fallback_summary = None
+            if (fallback_summary or "").strip():
+                messages.append({
+                    "role": "system",
+                    "content": f"이전 상담 요약(세션 기반):\n{(fallback_summary or '').strip()}"
+                })
+                try:
+                    logger.info(f"Prompt includes counsel summary fallback (user_id={target_user_id}, chars={len((fallback_summary or '').strip())})")
+                except Exception:
+                    pass
+            else:
+                try:
+                    logger.info(f"No user summary found for user_id={target_user_id}; using history only")
+                except Exception:
+                    pass
 
         # 히스토리 구성 규칙
         # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송

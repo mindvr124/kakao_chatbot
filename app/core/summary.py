@@ -79,7 +79,15 @@ async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
         .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"load_user_full_history failed after rollback: {e}")
+            return ""
     messages = res.scalars().all()
     lines = []
     for m in messages:
@@ -97,7 +105,15 @@ async def save_counsel_summary(session: AsyncSession, user_id: str, conv_id, con
         .where(CounselSummary.conv_id == conv_id)
         .limit(1)
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"save_counsel_summary select failed after rollback: {e}")
+            return None
     existing = res.scalar_one_or_none()
 
     if existing:
@@ -105,13 +121,21 @@ async def save_counsel_summary(session: AsyncSession, user_id: str, conv_id, con
         # created_at을 최신으로 갱신(별도 updated_at 컬럼 없이 요구사항 충족)
         from datetime import datetime
         existing.created_at = datetime.utcnow()
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
         await session.refresh(existing)
         return existing
 
     summary = CounselSummary(user_id=user_id, conv_id=conv_id, content=content.strip())
     session.add(summary)
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(summary)
     return summary
 
@@ -122,16 +146,36 @@ async def get_last_counsel_summary(session: AsyncSession, user_id: str) -> Optio
         .order_by(CounselSummary.created_at.desc())
         .limit(1)
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"get_last_counsel_summary failed after rollback: {e}")
+            return None
     s = res.scalar_one_or_none()
     return s.content if s else None
 
 async def get_or_init_user_summary(session: AsyncSession, user_id: str) -> UserSummary:
-    us = await session.get(UserSummary, user_id)
+    try:
+        us = await session.get(UserSummary, user_id)
+    except Exception:
+        try:
+            await session.rollback()
+            us = await session.get(UserSummary, user_id)
+        except Exception as e:
+            logger.warning(f"get_or_init_user_summary get failed after rollback: {e}")
+            raise
     if us is None:
         us = UserSummary(user_id=user_id, summary=None, last_message_created_at=None)
         session.add(us)
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
         await session.refresh(us)
     return us
 
@@ -155,7 +199,15 @@ async def maybe_rollup_user_summary(
         .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"maybe_rollup_user_summary select failed after rollback: {e}")
+            return
     msgs = res.scalars().all()
     if not msgs:
         return
@@ -191,7 +243,11 @@ async def maybe_rollup_user_summary(
     us.last_message_created_at = msgs[-1].created_at
     from datetime import datetime
     us.updated_at = datetime.utcnow()
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 
 async def upsert_user_summary_from_text(
     session: AsyncSession,
@@ -213,7 +269,15 @@ async def upsert_user_summary_from_text(
         .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"upsert_user_summary_from_text select failed after rollback: {e}")
+            return
     msgs = list(res.scalars().all())
     carry_msgs = msgs[-6:] if len(msgs) >= 6 else msgs
     carry_pairs = []
@@ -226,7 +290,11 @@ async def upsert_user_summary_from_text(
     us.last_message_created_at = msgs[-1].created_at if msgs else us.last_message_created_at
     from datetime import datetime
     us.updated_at = datetime.utcnow()
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
 
 async def get_counsel_summary_by_conv(session: AsyncSession, conv_id) -> Optional[CounselSummary]:
     stmt = (
@@ -234,5 +302,13 @@ async def get_counsel_summary_by_conv(session: AsyncSession, conv_id) -> Optiona
         .where(CounselSummary.conv_id == conv_id)
         .limit(1)
     )
-    res = await session.execute(stmt)
+    try:
+        res = await session.execute(stmt)
+    except Exception:
+        try:
+            await session.rollback()
+            res = await session.execute(stmt)
+        except Exception as e:
+            logger.warning(f"get_counsel_summary_by_conv failed after rollback: {e}")
+            return None
     return res.scalar_one_or_none()

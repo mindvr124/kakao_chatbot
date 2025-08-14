@@ -37,16 +37,37 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
                     if conv:
                         user_id = conv.user_id
                 except Exception:
-                    pass
-            await save_message(
-                session=session, 
-                conv_id=conv_id, 
-                role="user", 
-                content=user_text, 
-                request_id=request_id,
-                tokens=None,
-                user_id=user_id,
-            )
+                    try:
+                        await session.rollback()
+                        conv = await session.get(Conversation, conv_id)
+                        if conv:
+                            user_id = conv.user_id
+                    except Exception:
+                        pass
+            try:
+                await save_message(
+                    session=session, 
+                    conv_id=conv_id, 
+                    role="user", 
+                    content=user_text, 
+                    request_id=request_id,
+                    tokens=None,
+                    user_id=user_id,
+                )
+            except Exception:
+                try:
+                    await session.rollback()
+                    await save_message(
+                        session=session, 
+                        conv_id=conv_id, 
+                        role="user", 
+                        content=user_text, 
+                        request_id=request_id,
+                        tokens=None,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    raise
             logger.bind(x_request_id=request_id).info(f"User message saved successfully")
             try:
                 update_last_activity(conv_id)
@@ -71,16 +92,37 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     if conv:
                         user_id = conv.user_id
                 except Exception:
-                    pass
-            await save_message(
-                session=session, 
-                conv_id=conv_id, 
-                role="assistant", 
-                content=remove_markdown(final_text), 
-                request_id=request_id,
-                tokens=tokens_used,
-                user_id=user_id,
-            )
+                    try:
+                        await session.rollback()
+                        conv = await session.get(Conversation, conv_id)
+                        if conv:
+                            user_id = conv.user_id
+                    except Exception:
+                        pass
+            try:
+                await save_message(
+                    session=session, 
+                    conv_id=conv_id, 
+                    role="assistant", 
+                    content=remove_markdown(final_text), 
+                    request_id=request_id,
+                    tokens=tokens_used,
+                    user_id=user_id,
+                )
+            except Exception:
+                try:
+                    await session.rollback()
+                    await save_message(
+                        session=session, 
+                        conv_id=conv_id, 
+                        role="assistant", 
+                        content=remove_markdown(final_text), 
+                        request_id=request_id,
+                        tokens=tokens_used,
+                        user_id=user_id,
+                    )
+                except Exception:
+                    raise
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
             try:
                 # conv_id로 user_id 조회 후 사용자 요약 롤업
@@ -90,7 +132,13 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     if conv:
                         await maybe_rollup_user_summary(session, conv.user_id)
                 except Exception:
-                    pass
+                    try:
+                        await session.rollback()
+                        conv = await session.get(Conversation, conv_id)
+                        if conv:
+                            await maybe_rollup_user_summary(session, conv.user_id)
+                    except Exception:
+                        pass
             finally:
                 pass
             try:
@@ -250,7 +298,15 @@ async def _summarize_and_close(conv_id: str):
                 conv_uuid = UUID(str(conv_id))
             except Exception:
                 return
-            conv: Conversation | None = await session.get(Conversation, conv_uuid)
+            try:
+                conv: Conversation | None = await session.get(Conversation, conv_uuid)
+            except Exception:
+                try:
+                    await session.rollback()
+                    conv = await session.get(Conversation, conv_uuid)
+                except Exception as e:
+                    logger.warning(f"_summarize_and_close get(Conversation) failed after rollback: {e}")
+                    return
             if not conv:
                 return
             user_id = conv.user_id
@@ -261,17 +317,36 @@ async def _summarize_and_close(conv_id: str):
                     us = await get_or_init_user_summary(session, user_id)
                     prev_summary = us.summary or ""
                 except Exception:
-                    prev_summary = ""
+                    try:
+                        await session.rollback()
+                        us = await get_or_init_user_summary(session, user_id)
+                        prev_summary = us.summary or ""
+                    except Exception:
+                        prev_summary = ""
                 history_text = await load_user_full_history(session, user_id)
                 resp = await generate_summary(ai_service.client, history_text, prev_summary)
                 summary_text = resp.content or prev_summary
-                await upsert_user_summary_from_text(session, user_id, summary_text)
+                try:
+                    await upsert_user_summary_from_text(session, user_id, summary_text)
+                except Exception:
+                    try:
+                        await session.rollback()
+                        await upsert_user_summary_from_text(session, user_id, summary_text)
+                    except Exception:
+                        raise
                 logger.info(f"요약 저장 완료 (user_id={user_id}, conv_id={conv_uuid})")
             except Exception as e:
                 logger.warning(f"2분 요약 저장 실패: {e}")
             # 10턴 롤업도 병행 시도 (중복 시 최신값 유지)
             try:
-                await maybe_rollup_user_summary(session, user_id, conv_uuid)
+                try:
+                    await maybe_rollup_user_summary(session, user_id, conv_uuid)
+                except Exception:
+                    try:
+                        await session.rollback()
+                        await maybe_rollup_user_summary(session, user_id, conv_uuid)
+                    except Exception:
+                        pass
             except Exception:
                 pass
         finally:
