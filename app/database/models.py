@@ -28,7 +28,6 @@ class Conversation(SQLModel, table=True):
 
 class Message(SQLModel, table=True):
     msg_id: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
     user_id: Optional[str] = Field(default=None, foreign_key="appuser.user_id", index=True)
     role: MessageRole = Field(index=True)
@@ -76,8 +75,5 @@ class UserSummary(SQLModel, table=True):
     """사용자 단위 누적 요약 및 롤업 윈도우 상태 (단일 정의)"""
     user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
     summary: Optional[str] = None
-    last_rollup_at: Optional[datetime] = Field(default=None, index=True)
-    carryover_messages_json: Optional[str] = None
-    window_count: int = Field(default=0)
     last_message_created_at: Optional[datetime] = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

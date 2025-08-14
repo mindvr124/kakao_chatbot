@@ -70,6 +70,26 @@ async def save_message(
     user_id: str | None = None,
 ) -> Message:
     try:
+        # user_id가 비었으면 conv_id로 보강 시도
+        if not user_id:
+            try:
+                from uuid import UUID
+                from app.database.models import Conversation as DBConversation
+                conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+                conv_obj = await session.get(DBConversation, conv_uuid)
+                if conv_obj and conv_obj.user_id:
+                    user_id = conv_obj.user_id
+            except Exception:
+                try:
+                    await session.rollback()
+                    from uuid import UUID
+                    from app.database.models import Conversation as DBConversation
+                    conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+                    conv_obj = await session.get(DBConversation, conv_uuid)
+                    if conv_obj and conv_obj.user_id:
+                        user_id = conv_obj.user_id
+                except Exception:
+                    pass
         msg = Message(
             conv_id=conv_id,
             user_id=user_id,

@@ -261,7 +261,7 @@ async def upsert_user_summary_from_text(
     if not summary_text:
         return
     us = await get_or_init_user_summary(session, user_id)
-    # 최근 3턴 추출 (user_id 기준)
+    # 최근 메시지 시각만 갱신 (carryover 저장 컬럼 제거)
     from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
@@ -279,14 +279,7 @@ async def upsert_user_summary_from_text(
             logger.warning(f"upsert_user_summary_from_text select failed after rollback: {e}")
             return
     msgs = list(res.scalars().all())
-    carry_msgs = msgs[-6:] if len(msgs) >= 6 else msgs
-    carry_pairs = []
-    for m in carry_msgs:
-        role = getattr(m.role, "value", None) or str(m.role)
-        carry_pairs.append({"role": role, "content": m.content})
-    import json
     us.summary = summary_text.strip()
-    us.carryover_messages_json = json.dumps(carry_pairs, ensure_ascii=False)
     us.last_message_created_at = msgs[-1].created_at if msgs else us.last_message_created_at
     from datetime import datetime
     us.updated_at = datetime.utcnow()
