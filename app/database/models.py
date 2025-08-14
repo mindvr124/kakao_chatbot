@@ -27,6 +27,7 @@ class Conversation(SQLModel, table=True):
     summary: Optional[str] = None
 
 class Message(SQLModel, table=True):
+    msg_id: UUID = Field(default_factory=uuid4, primary_key=True)
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
     user_id: Optional[str] = Field(default=None, foreign_key="appuser.user_id", index=True)
     role: MessageRole = Field(index=True)
