@@ -130,6 +130,8 @@ async def skill_endpoint(
             immediate = callback_waiting_response("답변을 생성 중입니다...")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
+                final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+                tokens_used: int = 0
                 try:
                     # 내부에서 독립 세션으로 모든 무거운 작업 처리
                     async for s in get_session():
@@ -146,16 +148,21 @@ async def skill_endpoint(
                             except Exception as save_user_err:
                                 logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
                             # AI 생성에 BUDGET 가드
-                            final_text, tokens_used = await asyncio.wait_for(
-                                ai_service.generate_response(
-                                    session=s,
-                                    conv_id=conv.conv_id,
-                                    user_input=user_text,
-                                    prompt_name="default",
-                                    user_id=user_id
-                                ),
-                                timeout=BUDGET,
-                            )
+                            try:
+                                final_text, tokens_used = await asyncio.wait_for(
+                                    ai_service.generate_response(
+                                        session=s,
+                                        conv_id=conv.conv_id,
+                                        user_input=user_text,
+                                        prompt_name="default",
+                                        user_id=user_id
+                                    ),
+                                    timeout=BUDGET,
+                                )
+                            except asyncio.TimeoutError:
+                                logger.bind(x_request_id=request_id).warning("AI generation timeout in callback; using fallback message")
+                                final_text = "답변 생성이 지연되어 간단히 안내드려요 🙏"
+                                tokens_used = 0
                             await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used, user_id)
                             try:
                                 await maybe_rollup_user_summary(s, user_id, conv.conv_id)
@@ -172,8 +179,7 @@ async def skill_endpoint(
                     except Exception as post_err:
                         logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
 
-                    # 2차(옵션): 동기 즉시응답을 보낸 뒤라도, 최종 생성이 끝났다면 동일 본문을 추가 콜백으로 한 번 더 보내고 싶다면 여기에 구현
-                    # 현재는 1차 콜백만 수행. 필요 시 중복 방지 토큰을 붙여 멱등 처리 권장.
+                    # 추가 콜백 전송 없음 (한 번만 전송)
                 except asyncio.TimeoutError:
                     # AI 타임아웃 시 간단 안내로 콜백
                     try:
