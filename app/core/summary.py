@@ -4,6 +4,7 @@ from typing import Optional
 from loguru import logger
 
 from app.database.models import Message, Conversation, CounselSummary, UserSummary
+from app.database.service import save_event_log
 
 class SummaryResponse:
     def __init__(self, content: str):
@@ -184,9 +185,9 @@ async def maybe_rollup_user_summary(
     user_id: str,
     new_messages: list[Message] | None = None,
 ) -> None:
-    """사용자 단위 20턴 윈도우 요약을 집계한다.
-    - 최근 대화에서 신규 메시지 수가 설정 임계치 이상일 때, 기존 요약과 합쳐서 업데이트
-    - 중복 없이 합치도록 프롬프트에 지시
+    """사용자 단위 롤업 요약 (10턴 기준). 조건 만족 시에만 요약 업데이트.
+    - 임계치: 마지막 롤업 이후 신규 메시지가 MAX_TURNS(기본 10) 이상일 때
+    - 포함 내용: 최근 MAX_TURNS 메시지 기반으로 기존 요약에 병합
     """
     from app.config import settings
     MAX_TURNS = getattr(settings, "summary_turn_window", 10)
@@ -212,11 +213,26 @@ async def maybe_rollup_user_summary(
     if not msgs:
         return
 
-    # 최근 MAX_TURNS 메시지 (user/assistant 모두 포함)
-    recent = msgs[-MAX_TURNS:]
-
-    # 사용자 단위 기존 요약 로드
+    # 사용자 요약 엔트리 확보
     us = await get_or_init_user_summary(session, user_id)
+    last_ptr = us.last_message_created_at
+
+    # 트리거 조건 계산: 마지막 포인터 이후 신규 메시지 수
+    if last_ptr is None:
+        new_count = len(msgs)
+    else:
+        new_count = sum(1 for m in msgs if m.created_at and m.created_at > last_ptr)
+
+    if new_count < MAX_TURNS:
+        # 이벤트 로그(스킵)
+        try:
+            await save_event_log(session, "summary_rollup_skipped", user_id, None, None, {"new_count": new_count, "need": MAX_TURNS})
+        except Exception:
+            pass
+        return
+
+    # 최근 MAX_TURNS 메시지 (user/assistant 포함)
+    recent = msgs[-MAX_TURNS:]
     existing_summary = (us.summary or "").strip()
 
     # 프롬프트 구성 및 요약 생성
@@ -236,6 +252,10 @@ async def maybe_rollup_user_summary(
         merged_text, _ = await ai_service.generate_response(session, None, prompt, "default", user_id)
     except Exception as e:
         logger.warning(f"롤업 요약 생성 실패: {e}")
+        try:
+            await save_event_log(session, "summary_rollup_failed", user_id, None, None, {"error": str(e)[:300]})
+        except Exception:
+            pass
         return
 
     # 사용자 요약과 마지막 메시지 시간 갱신
@@ -248,6 +268,10 @@ async def maybe_rollup_user_summary(
     except Exception:
         await session.rollback()
         raise
+    try:
+        await save_event_log(session, "summary_rollup_saved", user_id, None, None, {"len": len(us.summary or ""), "used_msgs": len(recent)})
+    except Exception:
+        pass
 
 async def upsert_user_summary_from_text(
     session: AsyncSession,
