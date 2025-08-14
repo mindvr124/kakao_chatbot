@@ -92,10 +92,10 @@ class AIService:
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
 
         messages: List[dict] = [{"role": "system", "content": system_prompt}]
-        # 맥락 활용 지시를 명시적으로 추가(템플릿에 없을 수 있으므로 보강)
+        # 맥락 활용 지시를 명시적으로 추가
         messages.append({
             "role": "system",
-            "content": "아래의 이전 요약과 대화 기록(요약 이후의 최근 메시지들)을 참고하여, 맥락에 맞는 답변을 제공하세요."
+            "content": "아래의 이전 요약(있다면)과 대화 기록을 참고하여, 맥락에 맞는 답변을 제공하세요."
         })
 
         # conv_id가 UUID일 때만 대화/요약 조회
@@ -105,8 +105,7 @@ class AIService:
         except Exception:
             conv_uuid = None
 
-        # 사용자 누적 요약(UserSummary) 우선 사용, 없으면 CounselSummary fallback
-        us_summary: Optional[str] = None
+        # 사용자 요약 조회 (있으면 사용, 없으면 폴백 없음도 허용)
         target_user_id: Optional[str] = None
         conversation: Conversation | None = None
         if conv_uuid is not None:
@@ -115,90 +114,36 @@ class AIService:
         if not target_user_id:
             target_user_id = user_id
 
+        has_user_summary = False
+        user_summary_text: Optional[str] = None
         if target_user_id:
             try:
                 us = await get_or_init_user_summary(session, target_user_id)
                 if us and us.summary:
-                    us_summary = us.summary
+                    user_summary_text = us.summary
+                    has_user_summary = True
             except Exception:
-                us_summary = None
+                has_user_summary = False
 
-        if us_summary:
+        if has_user_summary and user_summary_text:
             messages.append({
                 "role": "system",
-                "content": f"이전 상담 요약:\n{us_summary}"
+                "content": f"이전 상담 요약:\n{user_summary_text}"
             })
+
+        # 히스토리 구성 규칙
+        # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송
+        # - 요약이 있으면: 최근 3턴(=6 메시지)만 전송
+        history_messages: List[Message] = await self.get_conversation_history(session, conv_uuid or conv_id)
+        if has_user_summary:
+            max_pairs = 3
+            max_msgs = max_pairs * 2
+            if len(history_messages) > max_msgs:
+                history_messages = history_messages[-max_msgs:]
         else:
-            # Fallback: 최근 CounselSummary 사용
-            try:
-                last_summary = await get_last_counsel_summary(session, target_user_id) if target_user_id else None
-                if last_summary:
-                    messages.append({
-                        "role": "system",
-                        "content": f"이전 상담 요약:\n{last_summary}"
-                    })
-            except Exception:
-                pass
-
-        # 캐리오버 메시지(요약 직후 이어지는 1~3번)를 우선 포함
-        try:
-            if target_user_id:
-                us = await get_or_init_user_summary(session, target_user_id)
-                if us and us.carryover_messages_json:
-                    carry_list = json.loads(us.carryover_messages_json)
-                    for cm in carry_list:
-                        role = str(cm.get("role") or "user").lower()
-                        content = cm.get("content") or ""
-                        if content:
-                            messages.append({
-                                "role": role if role in ("user", "assistant", "system") else "user",
-                                "content": content
-                            })
-        except Exception:
-            pass
-
-        # 히스토리 추가 (너무 길면 최근 N턴만 전송)
-        # 요약 이후의 메시지만 활용하여, 과거 메모리는 자동으로 '비우기' 효과
-        history_messages: List[Message] = []
-        if conv_uuid is not None and conversation is not None:
-            try:
-                from sqlmodel import select as sql_select
-                from app.database.models import Message as DBMessage
-                since_dt = None
-                try:
-                    us = await get_or_init_user_summary(session, conversation.user_id)
-                    since_dt = us.last_message_created_at if us else None
-                except Exception:
-                    since_dt = None
-
-                stmt_hist = sql_select(DBMessage).where(DBMessage.conv_id == conv_uuid)
-                if since_dt is not None:
-                    stmt_hist = stmt_hist.where(DBMessage.created_at > since_dt)
-                stmt_hist = stmt_hist.order_by(DBMessage.created_at.asc())
-                try:
-                    res = await session.execute(stmt_hist)
-                except Exception:
-                    try:
-                        await session.rollback()
-                        res = await session.execute(stmt_hist)
-                    except Exception as e:
-                        logger.warning(f"history select failed after rollback: {e}")
-                        res = None
-                history_messages = list(res.scalars().all()) if res else []
-            except Exception:
-                # 폴백: 전체 히스토리 사용
-                history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
-        else:
-            history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
-        # 유효하지 않은 conv이거나 히스토리가 비어 있으면, 직전 사용자 입력만 발화로 포함되므로 히스토리 없음
-        # 요약 + 최근 3턴(user/assistant 3쌍 = 6 messages)만 보냄
-        try:
-            max_turn_pairs = int(getattr(settings, "recent_turn_pairs", 3))
-        except Exception:
-            max_turn_pairs = 3
-        max_messages = max_turn_pairs * 2
-        if len(history_messages) > max_messages:
-            history_messages = history_messages[-max_messages:]
+            max_window = getattr(settings, "summary_turn_window", 20)
+            if len(history_messages) > max_window:
+                history_messages = history_messages[-max_window:]
         for m in history_messages:
             # Enum은 value로 안전하게 추출
             role_value = getattr(m.role, "value", None) or (m.role if isinstance(m.role, str) else str(m.role))
