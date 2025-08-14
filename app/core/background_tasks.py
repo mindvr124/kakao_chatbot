@@ -12,7 +12,7 @@ from loguru import logger
 import asyncio
 from datetime import datetime
 from app.core.ai_service import ai_service
-from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary, maybe_rollup_user_summary, upsert_user_summary_from_text
+from app.core.summary import maybe_rollup_user_summary
 from app.utils.utils import remove_markdown
 from app.database.models import Conversation
 
@@ -242,32 +242,9 @@ async def _summarize_and_close(conv_id: str):
             if not conv:
                 return
             user_id = conv.user_id
-            full_history = await load_full_history(session, conv_id)
-            last_summary = await get_last_counsel_summary(session, user_id)
-            summary_instruction = (
-                "다음 대화 기록을 요약하세요. 사용자 이름, 상담 이유, 핵심 내용을 중복 없이 간결하게.\n"
-                "기존 요약이 있다면 삭제하지 말고 덧붙여 업데이트. 무의미한 대화는 원문 유지."
-            )
-            prompt = f"{summary_instruction}\n\n[이전 요약]\n{last_summary or ''}\n\n[대화]\n{full_history}"
-            from app.config import settings
+            # 2분 워처는 더 이상 요약을 생성/저장하지 않음. 20턴 롤업만 사용
             try:
-                response = await ai_service.client.chat.completions.create(
-                    model=settings.openai_model,
-                    messages=[
-                        {"role": "system", "content": "당신은 상담 대화를 정확히 요약하는 비서입니다."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.2,
-                    max_tokens=300
-                )
-                summary_text = response.choices[0].message.content
-            except Exception as e:
-                logger.warning(f"Summary via fallback generate_response due to chat error: {e}")
-                summary_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default")
-            await save_counsel_summary(session, user_id, conv_id, summary_text)
-            # CounselSummary 저장과 동시에 UserSummary에도 즉시 반영
-            try:
-                await upsert_user_summary_from_text(session, user_id, conv_id, summary_text)
+                await maybe_rollup_user_summary(session, user_id, conv_id)
             except Exception:
                 pass
             # 사용자 누적 요약(UserSummary)도 최신으로 병합 및 포인터 갱신

@@ -130,6 +130,19 @@ class AIService:
                 "role": "system",
                 "content": f"이전 상담 요약:\n{user_summary_text}"
             })
+        else:
+            # Fallback: 사용자 기준 최신 CounselSummary 사용
+            try:
+                if target_user_id:
+                    last_summary = await get_last_counsel_summary(session, target_user_id)
+                    if last_summary:
+                        messages.append({
+                            "role": "system",
+                            "content": f"이전 상담 요약:\n{last_summary}"
+                        })
+                        has_user_summary = True
+            except Exception:
+                pass
 
         # 히스토리 구성 규칙
         # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송
