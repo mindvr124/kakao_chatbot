@@ -71,6 +71,16 @@ class PromptLog(SQLModel, table=True):
     messages_json: str  # JSON 직렬화된 messages
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
+class EventLog(SQLModel, table=True):
+    """운영 이벤트 로깅 테이블 (요청 수신, 메시지 저장, 콜백, 요약 성공/실패 등)"""
+    event_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    event_type: str = Field(index=True)
+    user_id: Optional[str] = Field(default=None, foreign_key="appuser.user_id", index=True)
+    conv_id: Optional[UUID] = Field(default=None, foreign_key="conversation.conv_id", index=True)
+    request_id: Optional[str] = Field(default=None, index=True)
+    details_json: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
 class UserSummary(SQLModel, table=True):
     """사용자 단위 누적 요약 및 롤업 윈도우 상태 (단일 정의)"""
     user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")

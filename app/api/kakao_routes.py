@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
-from app.database.service import upsert_user, get_or_create_conversation, save_message
+from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log
 from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
 from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity, _send_callback_response
@@ -77,6 +77,10 @@ async def skill_endpoint(
             elapsed = time.perf_counter() - t0
             time_left = max(0.2, 4.5 - elapsed)
             try:
+                try:
+                    await save_event_log(session, "request_received", user_id, None, x_request_id, {"callback": True})
+                except Exception:
+                    pass
                 async def _ensure_quick_conv():
                     await upsert_user(session, user_id)
                     conv = await get_or_create_conversation(session, user_id)
@@ -139,6 +143,10 @@ async def skill_endpoint(
 
             # 시간 내 미완료 → 즉시 콜백 대기 응답 반환, 백그라운드에서 '대기 콜백' → '최종 콜백' 순으로 전송
             immediate = callback_waiting_response("답변을 생성 중입니다...")
+            try:
+                await save_event_log(session, "callback_waiting_sent", user_id, None, x_request_id, None)
+            except Exception:
+                pass
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
                 final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
@@ -168,6 +176,10 @@ async def skill_endpoint(
                                 user_id=user_id
                             )
                             await save_message(s, conv_id_value, "assistant", final_text, trace_id, tokens_used, user_id)
+                            try:
+                                await save_event_log(s, "callback_final_sent", user_id, conv_id_value, request_id, {"tokens": tokens_used})
+                            except Exception:
+                                pass
                             try:
                                 await maybe_rollup_user_summary(s, user_id, conv_id_value)
                             except Exception:
@@ -240,6 +252,10 @@ async def skill_endpoint(
                 logger.warning("AI generation timeout. Falling back to canned message.")
                 final_text, tokens_used = ("잠시만요! 답변 생성이 길어져 간단히 안내드려요 🙏", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
+            try:
+                await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
+            except Exception:
+                pass
             
             # 메시지 저장 시도 (DB 장애 등으로 temp일 수 있음)
             try:

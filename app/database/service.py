@@ -1,6 +1,6 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary
+from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, EventLog
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
@@ -144,6 +144,38 @@ async def save_prompt_log(
     except Exception:
         # 로깅 실패는 무시
         pass
+
+async def save_event_log(
+    session: AsyncSession,
+    event_type: str,
+    user_id: str | None = None,
+    conv_id = None,
+    request_id: str | None = None,
+    details: dict | None = None,
+):
+    try:
+        from uuid import UUID
+        conv_uuid = None
+        try:
+            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
+        except Exception:
+            conv_uuid = None
+        log = EventLog(
+            event_type=event_type,
+            user_id=user_id,
+            conv_id=conv_uuid,
+            request_id=request_id,
+            details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
+        )
+        session.add(log)
+        await session.commit()
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        # 이벤트 로깅 실패는 조용히 무시
+        return
 
 # 프롬프트 관리 함수들
 async def create_prompt_template(
