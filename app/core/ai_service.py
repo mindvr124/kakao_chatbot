@@ -143,15 +143,26 @@ class AIService:
                 us = await get_or_init_user_summary(session, target_user_id)
                 if us and us.summary:
                     user_summary_text = us.summary
-                    has_user_summary = True
             except Exception:
                 has_user_summary = False
 
-        if has_user_summary and user_summary_text:
+        # 요약이 존재하면 무조건 포함 (공백 제거 후 판단)
+        summary_text_clean = (user_summary_text or "").strip()
+        has_user_summary = bool(summary_text_clean)
+        if has_user_summary:
             messages.append({
                 "role": "system",
-                "content": f"이전 상담 요약:\n{user_summary_text}"
+                "content": f"이전 상담 요약:\n{summary_text_clean}"
             })
+            try:
+                logger.info(f"Prompt includes user summary (user_id={target_user_id}, chars={len(summary_text_clean)})")
+            except Exception:
+                pass
+        else:
+            try:
+                logger.info(f"No user summary found for user_id={target_user_id}; using history only")
+            except Exception:
+                pass
 
         # 히스토리 구성 규칙
         # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송
