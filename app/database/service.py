@@ -6,33 +6,59 @@ from datetime import datetime
 from typing import Optional, List
 
 async def upsert_user(session: AsyncSession, user_id: str) -> AppUser:
-    user = await session.get(AppUser, user_id)
-    if not user:
-        user = AppUser(user_id=user_id)
-        session.add(user)
-        await session.commit()
-        await session.refresh(user)
-    return user
+    try:
+        user = await session.get(AppUser, user_id)
+        if not user:
+            user = AppUser(user_id=user_id)
+            session.add(user)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            await session.refresh(user)
+        return user
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
 
 async def get_or_create_conversation(session: AsyncSession, user_id: str) -> Conversation:
     """항상 최신 대화를 재사용. 없으면 새로 생성.
     기존의 세션 타임아웃 기반 신규 생성은 제거한다.
     """
-    stmt = (
-        select(Conversation)
-        .where(Conversation.user_id == user_id)
-        .order_by(Conversation.started_at.desc())
-        .limit(1)
-    )
-    res = await session.execute(stmt)
-    conv: Optional[Conversation] = res.scalar_one_or_none()
+    try:
+        stmt = (
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(Conversation.started_at.desc())
+            .limit(1)
+        )
+        try:
+            res = await session.execute(stmt)
+        except Exception:
+            await session.rollback()
+            res = await session.execute(stmt)
+        conv: Optional[Conversation] = res.scalar_one_or_none()
 
-    if conv is None:
-        conv = Conversation(user_id=user_id)
-        session.add(conv)
-        await session.commit()
-        await session.refresh(conv)
-    return conv
+        if conv is None:
+            conv = Conversation(user_id=user_id)
+            session.add(conv)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            await session.refresh(conv)
+        return conv
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
 
 async def save_message(
     session: AsyncSession,
@@ -43,18 +69,29 @@ async def save_message(
     tokens: int | None = None,
     user_id: str | None = None,
 ) -> Message:
-    msg = Message(
-        conv_id=conv_id,
-        user_id=user_id,
-        role=role,
-        content=content,
-        request_id=request_id,
-        tokens=tokens
-    )
-    session.add(msg)
-    await session.commit()
-    await session.refresh(msg)
-    return msg
+    try:
+        msg = Message(
+            conv_id=conv_id,
+            user_id=user_id,
+            role=role,
+            content=content,
+            request_id=request_id,
+            tokens=tokens
+        )
+        session.add(msg)
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        await session.refresh(msg)
+        return msg
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
 
 async def save_prompt_log(
     session: AsyncSession,
@@ -100,7 +137,11 @@ async def create_prompt_template(
     """새로운 프롬프트 템플릿을 생성합니다."""
     # 기존 프롬프트가 있다면 비활성화
     existing_stmt = select(PromptTemplate).where(PromptTemplate.name == name, PromptTemplate.is_active == True)
-    existing_result = await session.execute(existing_stmt)
+    try:
+        existing_result = await session.execute(existing_stmt)
+    except Exception:
+        await session.rollback()
+        existing_result = await session.execute(existing_stmt)
     existing_prompts = existing_result.scalars().all()
     
     # 새 버전 번호 계산
@@ -124,7 +165,11 @@ async def create_prompt_template(
     )
     
     session.add(new_prompt)
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     await session.refresh(new_prompt)
     return new_prompt
 
@@ -134,7 +179,11 @@ async def get_prompt_templates(session: AsyncSession, active_only: bool = True) 
     if active_only:
         stmt = stmt.where(PromptTemplate.is_active == True)
     
-    result = await session.execute(stmt)
+    try:
+        result = await session.execute(stmt)
+    except Exception:
+        await session.rollback()
+        result = await session.execute(stmt)
     return result.scalars().all()
 
 async def get_prompt_template_by_name(session: AsyncSession, name: str) -> Optional[PromptTemplate]:
@@ -145,7 +194,11 @@ async def get_prompt_template_by_name(session: AsyncSession, name: str) -> Optio
         .order_by(PromptTemplate.version.desc())
         .limit(1)
     )
-    result = await session.execute(stmt)
+    try:
+        result = await session.execute(stmt)
+    except Exception:
+        await session.rollback()
+        result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> bool:
@@ -156,7 +209,11 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
     
     # 같은 이름의 다른 프롬프트들 비활성화
     stmt = select(PromptTemplate).where(PromptTemplate.name == prompt.name, PromptTemplate.is_active == True)
-    result = await session.execute(stmt)
+    try:
+        result = await session.execute(stmt)
+    except Exception:
+        await session.rollback()
+        result = await session.execute(stmt)
     existing_prompts = result.scalars().all()
     
     for existing in existing_prompts:
@@ -164,7 +221,11 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
     
     # 선택한 프롬프트 활성화
     prompt.is_active = True
-    await session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        raise
     return True
 
 ## removed response state helpers

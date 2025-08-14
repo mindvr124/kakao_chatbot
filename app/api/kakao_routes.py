@@ -102,14 +102,25 @@ async def skill_endpoint(
                         try:
                             await upsert_user(s, user_id)
                             conv = await get_or_create_conversation(s, user_id)
-                            await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
-                            await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), trace_id, quick_tokens, user_id)
+                            try:
+                                await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
+                                await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), trace_id, quick_tokens, user_id)
+                            except Exception:
+                                try:
+                                    await s.rollback()
+                                except Exception:
+                                    pass
+                                raise
                             try:
                                 await maybe_rollup_user_summary(s, user_id, conv.conv_id)
                             except Exception:
                                 pass
                             break
                         except Exception as persist_err:
+                            try:
+                                await s.rollback()
+                            except Exception:
+                                pass
                             logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
                             break
 
