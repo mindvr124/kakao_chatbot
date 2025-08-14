@@ -73,62 +73,7 @@ async def skill_endpoint(
             user_text = "안녕하세요"
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
-            # 2-1) 5초 제한 내에서 남은 시간으로 동기 응답 시도 → 성공 시 즉시 응답
-            elapsed = time.perf_counter() - t0
-            time_left = max(0.2, 4.5 - elapsed)  # 여유 마진 확보
-            try:
-                # 가능한 경우 빠르게 실제 conv_id 확보 후 히스토리 포함 응답 생성
-                async def _ensure_quick_conv():
-                    await upsert_user(session, user_id)
-                    conv = await get_or_create_conversation(session, user_id)
-                    return conv.conv_id
-                try:
-                    quick_conv_id = await asyncio.wait_for(_ensure_quick_conv(), timeout=min(1.0, time_left - 0.1))
-                except Exception:
-                    quick_conv_id = f"temp_{user_id}"
-
-                quick_text, quick_tokens = await asyncio.wait_for(
-                    ai_service.generate_response(
-                        session=session,
-                        conv_id=quick_conv_id,
-                        user_input=user_text,
-                        prompt_name="default",
-                        user_id=user_id
-                    ),
-                    timeout=time_left,
-                )
-                # 동기 응답이 성공해도, 대화 로그는 백그라운드로 저장
-                async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
-                    async for s in get_session():
-                        try:
-                            await upsert_user(s, user_id)
-                            conv = await get_or_create_conversation(s, user_id)
-                            await save_message(s, conv.conv_id, "user", user_text, trace_id)
-                            await save_message(s, conv.conv_id, "assistant", reply_text, trace_id, quick_tokens)
-                            try:
-                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
-                            except Exception:
-                                pass
-                            break
-                        except Exception as persist_err:
-                            logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
-                            break
-
-                asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
-
-                try:
-                    update_last_activity(f"temp_{user_id}")
-                except Exception:
-                    pass
-                return JSONResponse(content={
-                    "version": "2.0",
-                    "template": {"outputs":[{"simpleText":{"text": remove_markdown(quick_text)}}]}
-                }, media_type="application/json; charset=utf-8")
-            except Exception:
-                # 시간 내 미완료 → 콜백 즉시 응답으로 폴백
-                pass
-
-            # 2-2) 실패 시 콜백 즉시 응답 후 백그라운드에서 완료 콜백 전송
+            # 콜백 모드: 즉시 콜백 대기 응답 반환 후, 백그라운드에서 최종 콜백 전송
             immediate = callback_waiting_response("답변을 생성 중입니다...")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
@@ -180,8 +125,7 @@ async def skill_endpoint(
                             logger.bind(x_request_id=request_id).info(f"Callback status={resp.status_code}, tokens={tokens_used}")
                             if resp.status_code >= 300:
                                 try:
-                                    err_txt = await resp.text()
-                                    logger.error(f"Callback non-2xx: {resp.status_code} body={err_txt}")
+                                    logger.error(f"Callback non-2xx: {resp.status_code} body={resp.text}")
                                 except Exception:
                                     pass
                         else:
