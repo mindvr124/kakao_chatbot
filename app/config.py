@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # 세션/서버
     session_timeout_minutes: int = Field(default=30, validation_alias=AliasChoices("SESSION_TIMEOUT_MINUTES"))
-    summary_turn_window: int = Field(default=20, validation_alias=AliasChoices("SUMMARY_TURN_WINDOW"))
+    summary_turn_window: int = Field(default=10, validation_alias=AliasChoices("SUMMARY_TURN_WINDOW"))
     port: int = Field(default=8000, validation_alias=AliasChoices("PORT"))
     log_level: str = Field(default="INFO", validation_alias=AliasChoices("LOG_LEVEL"))
     debug: bool = Field(default=False, validation_alias=AliasChoices("DEBUG"))

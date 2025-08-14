@@ -12,7 +12,13 @@ from loguru import logger
 import asyncio
 from datetime import datetime
 from app.core.ai_service import ai_service
-from app.core.summary import maybe_rollup_user_summary
+from app.core.summary import (
+    maybe_rollup_user_summary,
+    generate_summary,
+    upsert_user_summary_from_text,
+    load_full_history,
+    get_or_init_user_summary,
+)
 from app.utils.utils import remove_markdown
 from app.database.models import Conversation
 
@@ -238,22 +244,36 @@ async def _watch_sessions_loop():
 async def _summarize_and_close(conv_id: str):
     async for session in get_session():
         try:
-            conv: Conversation | None = await session.get(Conversation, conv_id)
+            # UUID 캐스팅 보장
+            try:
+                from uuid import UUID
+                conv_uuid = UUID(str(conv_id))
+            except Exception:
+                return
+            conv: Conversation | None = await session.get(Conversation, conv_uuid)
             if not conv:
                 return
             user_id = conv.user_id
-            # 2분 워처는 더 이상 요약을 생성/저장하지 않음. 20턴 롤업만 사용
+            # 전체 히스토리 기반 요약 생성 후 UserSummary에 반영
             try:
-                await maybe_rollup_user_summary(session, user_id, conv_id)
+                prev_summary = ""
+                try:
+                    us = await get_or_init_user_summary(session, user_id)
+                    prev_summary = us.summary or ""
+                except Exception:
+                    prev_summary = ""
+                history_text = await load_full_history(session, conv_uuid)
+                resp = await generate_summary(ai_service.client, history_text, prev_summary)
+                summary_text = resp.content or prev_summary
+                await upsert_user_summary_from_text(session, user_id, conv_uuid, summary_text)
+                logger.info(f"요약 저장 완료 (user_id={user_id}, conv_id={conv_uuid})")
+            except Exception as e:
+                logger.warning(f"2분 요약 저장 실패: {e}")
+            # 10턴 롤업도 병행 시도 (중복 시 최신값 유지)
+            try:
+                await maybe_rollup_user_summary(session, user_id, conv_uuid)
             except Exception:
                 pass
-            # 사용자 누적 요약(UserSummary)도 최신으로 병합 및 포인터 갱신
-            try:
-                from app.core.summary import maybe_rollup_user_summary
-                await maybe_rollup_user_summary(session, user_id, conv_id)
-            except Exception:
-                pass
-            logger.info(f"요약 저장 완료 (conv_id={conv_id})")
         finally:
             break
 

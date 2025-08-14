@@ -142,7 +142,7 @@ async def maybe_rollup_user_summary(
     - 중복 없이 합치도록 프롬프트에 지시
     """
     from app.config import settings
-    MAX_TURNS = getattr(settings, "summary_turn_window", 20)
+    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
 
     # 최근 대화 전체 메시지 조회 (간단 구현)
     stmt = (
