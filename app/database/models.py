@@ -27,28 +27,15 @@ class Conversation(SQLModel, table=True):
     summary: Optional[str] = None
 
 class Message(SQLModel, table=True):
-    msg_id: UUID = Field(default_factory=uuid4, primary_key=True)
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
+    user_id: Optional[str] = Field(default=None, foreign_key="appuser.user_id", index=True)
     role: MessageRole = Field(index=True)
     content: str
     tokens: Optional[int] = None
     request_id: Optional[str] = Field(default=None, index=True)  # X-Request-ID 등
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
-class AIProcessingTask(SQLModel, table=True):
-    """AI 처리 작업 상태를 추적하는 모델"""
-    task_id: UUID = Field(default_factory=uuid4, primary_key=True)
-    conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
-    user_input: str
-    status: AIProcessingStatus = Field(default=AIProcessingStatus.PENDING, index=True)
-    request_id: Optional[str] = Field(default=None, index=True)
-    error_message: Optional[str] = None
-    retry_count: int = Field(default=0)
-    max_retries: int = Field(default=3)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    started_at: Optional[datetime] = Field(default=None)
-    completed_at: Optional[datetime] = Field(default=None)
-    result_message_id: Optional[UUID] = Field(default=None, foreign_key="message.msg_id")
+## Removed: AIProcessingTask (unused)
 
 class PromptTemplate(SQLModel, table=True):
     prompt_id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -61,12 +48,7 @@ class PromptTemplate(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     created_by: Optional[str] = None  # 생성자
 
-class ResponseState(SQLModel, table=True):
-    """대화별로 OpenAI Responses API의 마지막 response_id를 저장"""
-    conv_id: UUID = Field(primary_key=True, foreign_key="conversation.conv_id")
-    last_response_id: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
+## Removed: ResponseState (unused)
 
 class CounselSummary(SQLModel, table=True):
     """대화 요약 저장 테이블"""

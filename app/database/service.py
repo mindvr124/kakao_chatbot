@@ -41,9 +41,11 @@ async def save_message(
     content: str,
     request_id: str | None = None,
     tokens: int | None = None,
+    user_id: str | None = None,
 ) -> Message:
     msg = Message(
         conv_id=conv_id,
+        user_id=user_id,
         role=role,
         content=content,
         request_id=request_id,

@@ -278,8 +278,8 @@ async def skill_endpoint(
                                 await upsert_user(s, user_id)
                                 conv = await get_or_create_conversation(s, user_id)
                                 if user_text:
-                                    await save_message(s, conv.conv_id, "user", user_text, request_id)
-                                await save_message(s, conv.conv_id, "assistant", reply_text, request_id)
+                                    await save_message(s, conv.conv_id, "user", user_text, request_id, None, user_id)
+                                await save_message(s, conv.conv_id, "assistant", reply_text, request_id, None, user_id)
                                 break
                             except Exception as persist_err:
                                 logger.bind(x_request_id=request_id).warning(f"Persist after temp conv failed: {persist_err}")
