@@ -12,7 +12,7 @@ from loguru import logger
 import asyncio
 from datetime import datetime
 from app.core.ai_service import ai_service
-from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary, maybe_rollup_user_summary
+from app.core.summary import load_full_history, get_last_counsel_summary, save_counsel_summary, maybe_rollup_user_summary, upsert_user_summary_from_text
 from app.utils.utils import remove_markdown
 from app.database.models import Conversation
 
@@ -265,6 +265,11 @@ async def _summarize_and_close(conv_id: str):
                 logger.warning(f"Summary via fallback generate_response due to chat error: {e}")
                 summary_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default")
             await save_counsel_summary(session, user_id, conv_id, summary_text)
+            # CounselSummary 저장과 동시에 UserSummary에도 즉시 반영
+            try:
+                await upsert_user_summary_from_text(session, user_id, conv_id, summary_text)
+            except Exception:
+                pass
             # 사용자 누적 요약(UserSummary)도 최신으로 병합 및 포인터 갱신
             try:
                 from app.core.summary import maybe_rollup_user_summary

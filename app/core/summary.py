@@ -142,7 +142,7 @@ async def maybe_rollup_user_summary(
     - 중복 없이 합치도록 프롬프트에 지시
     """
     from app.config import settings
-    MAX_TURNS = settings.summary_turn_window
+    MAX_TURNS = getattr(settings, "summary_turn_window", 20)
 
     # 최근 대화 전체 메시지 조회 (간단 구현)
     stmt = (
@@ -183,6 +183,40 @@ async def maybe_rollup_user_summary(
     # 사용자 요약과 마지막 메시지 시간 갱신
     us.summary = (merged_text or existing_summary).strip()
     us.last_message_created_at = msgs[-1].created_at
+    from datetime import datetime
+    us.updated_at = datetime.utcnow()
+    await session.commit()
+
+async def upsert_user_summary_from_text(
+    session: AsyncSession,
+    user_id: str,
+    conv_id,
+    summary_text: str,
+) -> None:
+    """CounselSummary 결과를 UserSummary에도 즉시 반영.
+    - 마지막 3턴을 carryover로 저장
+    - last_message_created_at 포인터 갱신
+    """
+    if not summary_text:
+        return
+    us = await get_or_init_user_summary(session, user_id)
+    # 최근 3턴 추출
+    stmt = (
+        select(Message)
+        .where(Message.conv_id == conv_id)
+        .order_by(Message.created_at.asc())
+    )
+    res = await session.execute(stmt)
+    msgs = list(res.scalars().all())
+    carry_msgs = msgs[-6:] if len(msgs) >= 6 else msgs
+    carry_pairs = []
+    for m in carry_msgs:
+        role = getattr(m.role, "value", None) or str(m.role)
+        carry_pairs.append({"role": role, "content": m.content})
+    import json
+    us.summary = summary_text.strip()
+    us.carryover_messages_json = json.dumps(carry_pairs, ensure_ascii=False)
+    us.last_message_created_at = msgs[-1].created_at if msgs else us.last_message_created_at
     from datetime import datetime
     us.updated_at = datetime.utcnow()
     await session.commit()
