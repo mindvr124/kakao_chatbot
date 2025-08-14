@@ -106,13 +106,12 @@ class AIService:
             conv_uuid = None
 
         # 사용자 요약 조회 (있으면 사용, 없으면 폴백 없음도 허용)
-        target_user_id: Optional[str] = None
+        # 항상 appuser의 user_id를 우선 사용 (conv_id는 보조)
+        target_user_id: Optional[str] = user_id
         conversation: Conversation | None = None
-        if conv_uuid is not None:
+        if not target_user_id and conv_uuid is not None:
             conversation = await session.get(Conversation, conv_uuid)
             target_user_id = conversation.user_id if conversation else None
-        if not target_user_id:
-            target_user_id = user_id
 
         has_user_summary = False
         user_summary_text: Optional[str] = None
@@ -130,19 +129,6 @@ class AIService:
                 "role": "system",
                 "content": f"이전 상담 요약:\n{user_summary_text}"
             })
-        else:
-            # Fallback: 사용자 기준 최신 CounselSummary 사용
-            try:
-                if target_user_id:
-                    last_summary = await get_last_counsel_summary(session, target_user_id)
-                    if last_summary:
-                        messages.append({
-                            "role": "system",
-                            "content": f"이전 상담 요약:\n{last_summary}"
-                        })
-                        has_user_summary = True
-            except Exception:
-                pass
 
         # 히스토리 구성 규칙
         # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송

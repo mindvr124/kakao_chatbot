@@ -155,12 +155,12 @@ async def maybe_rollup_user_summary(
     if not msgs:
         return
 
-    # 최근 MAX_TURNS 메시지
+    # 최근 MAX_TURNS 메시지 (user/assistant 모두 포함)
     recent = msgs[-MAX_TURNS:]
 
     # 사용자 단위 기존 요약 로드
     us = await get_or_init_user_summary(session, user_id)
-    existing_summary = us.summary or ""
+    existing_summary = (us.summary or "").strip()
 
     # 프롬프트 구성 및 요약 생성
     history_text = []
@@ -172,12 +172,13 @@ async def maybe_rollup_user_summary(
     from app.core.ai_service import ai_service
     try:
         prompt = (
-            "아래 최근 대화(MAX_TURNS) 요약을 기존 사용자 요약과 중복 없이 병합하세요.\n"
-            "- 기존 요약의 중요한 내용은 유지\n- 중복 문장은 제거\n- 핵심만 간결히\n"
+            "아래 최근 대화(MAX_TURNS)를 기존 사용자 요약과 중복 없이 병합하여 새로운 사용자 요약으로 업데이트하세요.\n"
+            "- 기존 요약의 중요한 내용은 유지\n- 중복 문장 제거\n- 핵심만 간결히\n"
             f"\n[기존 사용자 요약]\n{existing_summary}\n\n[최근 대화]\n{history_text}"
         )
         merged_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default", user_id)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"롤업 요약 생성 실패: {e}")
         return
 
     # 사용자 요약과 마지막 메시지 시간 갱신
