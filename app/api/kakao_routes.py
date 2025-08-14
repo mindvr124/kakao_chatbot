@@ -141,31 +141,24 @@ async def skill_endpoint(
                                 await upsert_user(s, user_id)
                                 return await get_or_create_conversation(s, user_id)
                             conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
+                            conv_id_value = str(conv.conv_id)
                             # 사용자 메시지 먼저 저장
                             try:
                                 if user_text:
-                                    await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
+                                    await save_message(s, conv_id_value, "user", user_text, trace_id, None, user_id)
                             except Exception as save_user_err:
                                 logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
-                            # AI 생성에 BUDGET 가드
+                            # AI 생성: 콜백 경로에서는 충분한 시간으로 생성 (타임아웃 미사용)
+                            final_text, tokens_used = await ai_service.generate_response(
+                                session=s,
+                                conv_id=conv_id_value,
+                                user_input=user_text,
+                                prompt_name="default",
+                                user_id=user_id
+                            )
+                            await save_message(s, conv_id_value, "assistant", final_text, trace_id, tokens_used, user_id)
                             try:
-                                final_text, tokens_used = await asyncio.wait_for(
-                                    ai_service.generate_response(
-                                        session=s,
-                                        conv_id=conv.conv_id,
-                                        user_input=user_text,
-                                        prompt_name="default",
-                                        user_id=user_id
-                                    ),
-                                    timeout=BUDGET,
-                                )
-                            except asyncio.TimeoutError:
-                                logger.bind(x_request_id=request_id).warning("AI generation timeout in callback; using fallback message")
-                                final_text = "답변 생성이 지연되어 간단히 안내드려요 🙏"
-                                tokens_used = 0
-                            await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used, user_id)
-                            try:
-                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
+                                await maybe_rollup_user_summary(s, user_id, conv_id_value)
                             except Exception:
                                 pass
                             break
@@ -180,18 +173,6 @@ async def skill_endpoint(
                         logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
 
                     # 추가 콜백 전송 없음 (한 번만 전송)
-                except asyncio.TimeoutError:
-                    # AI 타임아웃 시 간단 안내로 콜백
-                    try:
-                        if http_client is not None:
-                            payload = {
-                                "version": "2.0",
-                                "template": {"outputs": [{"simpleText": {"text": "답변 생성이 지연되어 간단히 안내드려요 🙏"}}]}
-                            }
-                            headers = {"Content-Type": "application/json; charset=utf-8"}
-                            await http_client.post(callback_url, json=payload, headers=headers)
-                    except Exception:
-                        pass
                 except Exception as e:
                     logger.bind(x_request_id=request_id).exception(f"Callback flow failed: {e}")
 
