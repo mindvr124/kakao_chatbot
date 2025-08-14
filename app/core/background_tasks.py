@@ -17,19 +17,29 @@ from app.utils.utils import remove_markdown
 from app.database.models import Conversation
 
 
-async def _save_user_message_background(conv_id: str, user_text: str, request_id: str | None):
+async def _save_user_message_background(conv_id: str, user_text: str, request_id: str | None, user_id: str | None = None):
     """백그라운드에서 사용자 메시지를 DB에 저장합니다."""
     try:
         logger.bind(x_request_id=request_id).info(f"Saving user message to DB in background")
         
         # 새로운 세션으로 DB 저장
         async for session in get_session():
+            # user_id가 없으면 conv에서 조회 시도
+            if user_id is None:
+                try:
+                    conv = await session.get(Conversation, conv_id)
+                    if conv:
+                        user_id = conv.user_id
+                except Exception:
+                    pass
             await save_message(
                 session=session, 
                 conv_id=conv_id, 
                 role="user", 
                 content=user_text, 
-                request_id=request_id
+                request_id=request_id,
+                tokens=None,
+                user_id=user_id,
             )
             logger.bind(x_request_id=request_id).info(f"User message saved successfully")
             try:
@@ -41,20 +51,29 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
         logger.bind(x_request_id=request_id).exception(f"Failed to save user message in background: {e}")
 
 
-async def _save_ai_response_background(conv_id: str, final_text: str, tokens_used: int, request_id: str | None):
+async def _save_ai_response_background(conv_id: str, final_text: str, tokens_used: int, request_id: str | None, user_id: str | None = None):
     """백그라운드에서 AI 응답을 DB에 저장합니다."""
     try:
         logger.bind(x_request_id=request_id).info(f"Saving AI response to DB in background")
         
         # 새로운 세션으로 DB 저장
         async for session in get_session():
+            # user_id가 없으면 conv에서 조회 시도
+            if user_id is None:
+                try:
+                    conv = await session.get(Conversation, conv_id)
+                    if conv:
+                        user_id = conv.user_id
+                except Exception:
+                    pass
             await save_message(
                 session=session, 
                 conv_id=conv_id, 
                 role="assistant", 
                 content=remove_markdown(final_text), 
                 request_id=request_id,
-                tokens=tokens_used
+                tokens=tokens_used,
+                user_id=user_id,
             )
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
             try:

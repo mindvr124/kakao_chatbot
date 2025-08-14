@@ -265,10 +265,10 @@ async def skill_endpoint(
                 if not str(conv_id).startswith("temp_"):
                     # 기존 방식: conv_id가 유효할 때 바로 저장
                     asyncio.create_task(_save_user_message_background(
-                        conv_id, user_text, x_request_id
+                        conv_id, user_text, x_request_id, user_id
                     ))
                     asyncio.create_task(_save_ai_response_background(
-                        conv_id, final_text, 0, x_request_id
+                        conv_id, final_text, 0, x_request_id, user_id
                     ))
                 else:
                     # temp_* 인 경우에도 백그라운드에서 정식 conv 생성 후 저장 시도
