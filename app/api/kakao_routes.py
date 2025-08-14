@@ -10,7 +10,7 @@ from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message
 from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
-from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity
+from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity, _send_callback_response
 from app.core.summary import maybe_rollup_user_summary
 from app.main import http_client, BUDGET, ENABLE_CALLBACK
 import time
@@ -73,7 +73,60 @@ async def skill_endpoint(
             user_text = "안녕하세요"
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
-            # 콜백 모드: 즉시 콜백 대기 응답 반환 후, 백그라운드에서 최종 콜백 전송
+            # 하이브리드: 4.5초 내 완료 시 즉시 최종 응답, 아니면 콜백 대기 응답 후 콜백 2회(대기/최종)
+            elapsed = time.perf_counter() - t0
+            time_left = max(0.2, 4.5 - elapsed)
+            try:
+                async def _ensure_quick_conv():
+                    await upsert_user(session, user_id)
+                    conv = await get_or_create_conversation(session, user_id)
+                    return conv.conv_id
+                try:
+                    quick_conv_id = await asyncio.wait_for(_ensure_quick_conv(), timeout=min(1.0, time_left - 0.1))
+                except Exception:
+                    quick_conv_id = f"temp_{user_id}"
+
+                quick_text, quick_tokens = await asyncio.wait_for(
+                    ai_service.generate_response(
+                        session=session,
+                        conv_id=quick_conv_id,
+                        user_input=user_text,
+                        prompt_name="default",
+                        user_id=user_id
+                    ),
+                    timeout=time_left,
+                )
+
+                async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
+                    async for s in get_session():
+                        try:
+                            await upsert_user(s, user_id)
+                            conv = await get_or_create_conversation(s, user_id)
+                            await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
+                            await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), trace_id, quick_tokens, user_id)
+                            try:
+                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
+                            except Exception:
+                                pass
+                            break
+                        except Exception as persist_err:
+                            logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
+                            break
+
+                asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
+
+                try:
+                    update_last_activity(quick_conv_id)
+                except Exception:
+                    pass
+                return JSONResponse(content={
+                    "version": "2.0",
+                    "template": {"outputs":[{"simpleText":{"text": remove_markdown(quick_text)}}]}
+                }, media_type="application/json; charset=utf-8")
+            except Exception:
+                pass
+
+            # 시간 내 미완료 → 즉시 콜백 대기 응답 반환, 백그라운드에서 '대기 콜백' → '최종 콜백' 순으로 전송
             immediate = callback_waiting_response("답변을 생성 중입니다...")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
@@ -89,7 +142,7 @@ async def skill_endpoint(
                             # 사용자 메시지 먼저 저장
                             try:
                                 if user_text:
-                                    await save_message(s, conv.conv_id, "user", user_text, trace_id)
+                                    await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
                             except Exception as save_user_err:
                                 logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
                             # AI 생성에 BUDGET 가드
@@ -98,11 +151,12 @@ async def skill_endpoint(
                                     session=s,
                                     conv_id=conv.conv_id,
                                     user_input=user_text,
-                                    prompt_name="default"
+                                    prompt_name="default",
+                                    user_id=user_id
                                 ),
                                 timeout=BUDGET,
                             )
-                            await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used)
+                            await save_message(s, conv.conv_id, "assistant", final_text, trace_id, tokens_used, user_id)
                             try:
                                 await maybe_rollup_user_summary(s, user_id, conv.conv_id)
                             except Exception:
@@ -112,24 +166,9 @@ async def skill_endpoint(
                             logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
                             break
 
-                    # 콜백 POST (전역 http_client 재사용)
-                    # 1차 콜백: 최종 응답을 즉시 콜백으로 전송
+                    # 최종 콜백 전송 (한 번만)
                     try:
-                        if http_client is not None:
-                            payload = {
-                                "version": "2.0",
-                                "template": {"outputs": [{"simpleText": {"text": final_text}}]}
-                            }
-                            headers = {"Content-Type": "application/json; charset=utf-8"}
-                            resp = await http_client.post(callback_url, json=payload, headers=headers)
-                            logger.bind(x_request_id=request_id).info(f"Callback status={resp.status_code}, tokens={tokens_used}")
-                            if resp.status_code >= 300:
-                                try:
-                                    logger.error(f"Callback non-2xx: {resp.status_code} body={resp.text}")
-                                except Exception:
-                                    pass
-                        else:
-                            logger.warning("http_client is not initialized; skipping callback send")
+                        await _send_callback_response(callback_url, final_text, tokens_used, request_id)
                     except Exception as post_err:
                         logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
 
