@@ -170,11 +170,39 @@ async def save_event_log(
         session.add(log)
         await session.commit()
     except Exception:
+        # 기존 세션이 중단 상태일 수 있으므로 롤백 후 별도 세션으로 재시도
         try:
             await session.rollback()
         except Exception:
             pass
-        # 이벤트 로깅 실패는 조용히 무시
+        try:
+            from app.database.db import get_session
+            async for s in get_session():
+                try:
+                    from uuid import UUID
+                    conv_uuid = None
+                    try:
+                        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
+                    except Exception:
+                        conv_uuid = None
+                    log = EventLog(
+                        event_type=event_type,
+                        user_id=user_id,
+                        conv_id=conv_uuid,
+                        request_id=request_id,
+                        details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
+                    )
+                    s.add(log)
+                    await s.commit()
+                    break
+                except Exception:
+                    try:
+                        await s.rollback()
+                    except Exception:
+                        pass
+                    break
+        except Exception:
+            pass
         return
 
 # 프롬프트 관리 함수들
