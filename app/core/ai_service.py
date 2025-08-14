@@ -120,6 +120,23 @@ class AIService:
             except Exception:
                 pass
 
+        # 캐리오버 메시지(요약 직후 이어지는 1~3번)를 우선 포함
+        try:
+            if target_user_id:
+                us = await get_or_init_user_summary(session, target_user_id)
+                if us and us.carryover_messages_json:
+                    carry_list = json.loads(us.carryover_messages_json)
+                    for cm in carry_list:
+                        role = str(cm.get("role") or "user").lower()
+                        content = cm.get("content") or ""
+                        if content:
+                            messages.append({
+                                "role": role if role in ("user", "assistant", "system") else "user",
+                                "content": content
+                            })
+        except Exception:
+            pass
+
         # 히스토리 추가 (너무 길면 최근 N턴만 전송)
         # 요약 이후의 메시지만 활용하여, 과거 메모리는 자동으로 '비우기' 효과
         history_messages: List[Message] = []
@@ -146,9 +163,14 @@ class AIService:
         else:
             history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
         # 유효하지 않은 conv이거나 히스토리가 비어 있으면, 직전 사용자 입력만 발화로 포함되므로 히스토리 없음
-        MAX_TURNS = settings.summary_turn_window  # 최근 N 메시지만 모델에 전송
-        if len(history_messages) > MAX_TURNS:
-            history_messages = history_messages[-MAX_TURNS:]
+        # 요약 + 최근 3턴(user/assistant 3쌍 = 6 messages)만 보냄
+        try:
+            max_turn_pairs = int(getattr(settings, "recent_turn_pairs", 3))
+        except Exception:
+            max_turn_pairs = 3
+        max_messages = max_turn_pairs * 2
+        if len(history_messages) > max_messages:
+            history_messages = history_messages[-max_messages:]
         for m in history_messages:
             # Enum은 value로 안전하게 추출
             role_value = getattr(m.role, "value", None) or (m.role if isinstance(m.role, str) else str(m.role))

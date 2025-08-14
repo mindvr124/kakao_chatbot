@@ -89,6 +89,15 @@ class PromptLog(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 class UserSummary(SQLModel, table=True):
+    """사용자 단위 누적 요약 및 롤업 윈도우 상태"""
+    user_id: str = Field(primary_key=True)
+    summary: Optional[str] = Field(default=None)
+    last_rollup_at: Optional[datetime] = Field(default=None, index=True)
+    carryover_messages_json: Optional[str] = Field(default=None)
+    window_count: int = Field(default=0)
+    last_message_created_at: Optional[datetime] = Field(default=None, index=True)
+
+class UserSummary(SQLModel, table=True):
     """사용자 단위 집계 요약 및 마지막 요약 지점 트래킹"""
     user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
     summary: Optional[str] = None
