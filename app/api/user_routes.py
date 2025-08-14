@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.database.db import get_session
 from app.schemas.schemas import AIProcessingStatusResponse
 from app.core.ai_processing_service import ai_processing_service
-from app.database.models import AIProcessingTask, AIProcessingStatus, Message, MessageRole
+from app.database.models import AIProcessingStatus, Message, MessageRole
 
 router = APIRouter(prefix="/user")
 
@@ -18,44 +18,8 @@ async def get_ai_processing_status(
     session: AsyncSession = Depends(get_session)
 ):
     """AI 처리 상태를 조회합니다."""
-    try:
-        # 작업 상태 조회
-        task = await ai_processing_service.get_task_status(session, task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-        
-        # 응답 데이터 구성
-        response_data = {
-            "task_id": task.task_id,
-            "status": task.status,
-            "created_at": task.created_at,
-            "retry_count": task.retry_count
-        }
-        
-        # 상태별 추가 정보
-        if task.status == AIProcessingStatus.COMPLETED:
-            # 완료된 경우 AI 응답 메시지 조회
-            if task.result_message_id:
-                stmt = select(Message).where(Message.msg_id == task.result_message_id)
-                result = await session.execute(stmt)
-                message = result.scalar_one_or_none()
-                if message:
-                    response_data["ai_response"] = message.content
-                    response_data["tokens_used"] = message.tokens
-                    response_data["completed_at"] = task.completed_at
-        
-        elif task.status == AIProcessingStatus.FAILED:
-            response_data["error_message"] = task.error_message
-            response_data["completed_at"] = task.completed_at
-        
-        elif task.status == AIProcessingStatus.PROCESSING:
-            response_data["started_at"] = task.started_at
-        
-        return AIProcessingStatusResponse(**response_data)
-        
-    except Exception as e:
-        logger.exception(f"Failed to get AI processing status for task {task_id}")
-        raise HTTPException(500, f"Failed to get status: {str(e)}")
+    # AIProcessingTask 제거됨 → 고정 응답
+    return AIProcessingStatusResponse(task_id=task_id, status="disabled", created_at=None, retry_count=0)
 
 
 @router.get("/conversation/{conv_id}/latest-ai-response")

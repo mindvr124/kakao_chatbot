@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 import time
 
-from app.database.models import AIProcessingTask, AIProcessingStatus
+from app.database.models import AIProcessingStatus
 from app.core.ai_processing_service import ai_processing_service
 from app.database.db import AsyncSessionLocal
 
