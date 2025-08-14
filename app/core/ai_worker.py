@@ -57,36 +57,8 @@ class AIWorker:
         """대기 중인 작업들을 처리합니다."""
         session = AsyncSessionLocal()
         try:
-            # 대기 중인 작업 조회
-            stmt = (
-                select(AIProcessingTask)
-                .where(AIProcessingTask.status == AIProcessingStatus.PENDING)
-                .order_by(AIProcessingTask.created_at.asc())
-                .limit(5)  # 한 번에 최대 5개 작업 처리
-            )
-            
-            result = await session.execute(stmt)
-            pending_tasks = result.scalars().all()
-            
-            if not pending_tasks:
-                return
-            
-            logger.info(f"Found {len(pending_tasks)} pending AI tasks")
-            
-            # 각 작업을 병렬로 처리
-            tasks = []
-            for task in pending_tasks:
-                task_processor = self._process_single_task(task.task_id)
-                tasks.append(task_processor)
-            
-            # 병렬 처리 (최대 3개 동시 처리)
-            semaphore = asyncio.Semaphore(3)
-            async def limited_task(task):
-                async with semaphore:
-                    return await task
-            
-            limited_tasks = [limited_task(task) for task in tasks]
-            await asyncio.gather(*limited_tasks, return_exceptions=True)
+            # 큐 기능 비활성화됨 → 아무 것도 하지 않음
+            return
             
         except Exception as e:
             logger.error(f"Error processing pending tasks: {e}")
