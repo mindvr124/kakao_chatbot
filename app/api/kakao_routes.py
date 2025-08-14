@@ -217,8 +217,24 @@ async def skill_endpoint(
         # 4) 즉시응답 경로만 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
         try:
             async def _ensure_conv_main():
-                await upsert_user(session, user_id)
-                return await get_or_create_conversation(session, user_id)
+                try:
+                    await upsert_user(session, user_id)
+                except Exception:
+                    try:
+                        await session.rollback()
+                        await upsert_user(session, user_id)
+                    except Exception as e:
+                        logger.warning(f"upsert_user failed after rollback: {e}")
+                        raise
+                try:
+                    return await get_or_create_conversation(session, user_id)
+                except Exception:
+                    try:
+                        await session.rollback()
+                        return await get_or_create_conversation(session, user_id)
+                    except Exception as e:
+                        logger.warning(f"get_or_create_conversation failed after rollback: {e}")
+                        raise
             conv = await asyncio.wait_for(_ensure_conv_main(), timeout=1.5)
             conv_id = conv.conv_id
         except Exception as db_err:

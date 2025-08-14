@@ -42,8 +42,20 @@ class AIService:
             .order_by(PromptTemplate.version.desc())
             .limit(1)
         )
-        result = await session.execute(stmt)
-        return result.scalar_one_or_none()
+        try:
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+        except Exception as e:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            try:
+                result = await session.execute(stmt)
+                return result.scalar_one_or_none()
+            except Exception:
+                logger.warning(f"get_active_prompt failed after rollback: {e}")
+                return None
 
     @traceable
     async def get_conversation_history(self, session: AsyncSession, conv_id) -> List[Message]:
@@ -61,7 +73,15 @@ class AIService:
             .where(Message.conv_id == conv_uuid)
             .order_by(Message.created_at.asc())
         )
-        result = await session.execute(stmt)
+        try:
+            result = await session.execute(stmt)
+        except Exception as e:
+            try:
+                await session.rollback()
+                result = await session.execute(stmt)
+            except Exception:
+                logger.warning(f"get_conversation_history failed after rollback: {e}")
+                return []
         messages = result.scalars().all()
         return messages
 
@@ -142,7 +162,7 @@ class AIService:
         history_messages: List[Message] = []
         if conv_uuid is not None and conversation is not None:
             try:
-                from sqlmodel import select
+                from sqlmodel import select as sql_select
                 from app.database.models import Message as DBMessage
                 since_dt = None
                 try:
@@ -151,12 +171,20 @@ class AIService:
                 except Exception:
                     since_dt = None
 
-                stmt = select(DBMessage).where(DBMessage.conv_id == conv_uuid)
+                stmt_hist = sql_select(DBMessage).where(DBMessage.conv_id == conv_uuid)
                 if since_dt is not None:
-                    stmt = stmt.where(DBMessage.created_at > since_dt)
-                stmt = stmt.order_by(DBMessage.created_at.asc())
-                res = await session.execute(stmt)
-                history_messages = list(res.scalars().all())
+                    stmt_hist = stmt_hist.where(DBMessage.created_at > since_dt)
+                stmt_hist = stmt_hist.order_by(DBMessage.created_at.asc())
+                try:
+                    res = await session.execute(stmt_hist)
+                except Exception:
+                    try:
+                        await session.rollback()
+                        res = await session.execute(stmt_hist)
+                    except Exception as e:
+                        logger.warning(f"history select failed after rollback: {e}")
+                        res = None
+                history_messages = list(res.scalars().all()) if res else []
             except Exception:
                 # 폴백: 전체 히스토리 사용
                 history_messages = await self.get_conversation_history(session, conv_uuid or conv_id)
