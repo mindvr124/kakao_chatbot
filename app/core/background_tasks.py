@@ -16,7 +16,7 @@ from app.core.summary import (
     maybe_rollup_user_summary,
     generate_summary,
     upsert_user_summary_from_text,
-    load_full_history,
+    load_user_full_history,
     get_or_init_user_summary,
 )
 from app.utils.utils import remove_markdown
@@ -88,7 +88,7 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     from app.database.models import Conversation
                     conv = await session.get(Conversation, conv_id)
                     if conv:
-                        await maybe_rollup_user_summary(session, conv.user_id, conv_id)
+                        await maybe_rollup_user_summary(session, conv.user_id)
                 except Exception:
                     pass
             finally:
@@ -254,7 +254,7 @@ async def _summarize_and_close(conv_id: str):
             if not conv:
                 return
             user_id = conv.user_id
-            # 전체 히스토리 기반 요약 생성 후 UserSummary에 반영
+            # 전체 히스토리(user_id 기준) 기반 요약 생성 후 UserSummary에 반영
             try:
                 prev_summary = ""
                 try:
@@ -262,10 +262,10 @@ async def _summarize_and_close(conv_id: str):
                     prev_summary = us.summary or ""
                 except Exception:
                     prev_summary = ""
-                history_text = await load_full_history(session, conv_uuid)
+                history_text = await load_user_full_history(session, user_id)
                 resp = await generate_summary(ai_service.client, history_text, prev_summary)
                 summary_text = resp.content or prev_summary
-                await upsert_user_summary_from_text(session, user_id, conv_uuid, summary_text)
+                await upsert_user_summary_from_text(session, user_id, summary_text)
                 logger.info(f"요약 저장 완료 (user_id={user_id}, conv_id={conv_uuid})")
             except Exception as e:
                 logger.warning(f"2분 요약 저장 실패: {e}")

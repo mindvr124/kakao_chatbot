@@ -69,10 +69,14 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
         logger.warning(f"generate_summary 실패: {e}")
         return SummaryResponse("요약을 생성하지 못했습니다.")
 
-async def load_full_history(session: AsyncSession, conv_id) -> str:
+async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
+    if not user_id:
+        return ""
+    from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
-        .where(Message.conv_id == conv_id)
+        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+        .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
     res = await session.execute(stmt)
@@ -134,7 +138,6 @@ async def get_or_init_user_summary(session: AsyncSession, user_id: str) -> UserS
 async def maybe_rollup_user_summary(
     session: AsyncSession,
     user_id: str,
-    conv_id,
     new_messages: list[Message] | None = None,
 ) -> None:
     """사용자 단위 20턴 윈도우 요약을 집계한다.
@@ -144,10 +147,12 @@ async def maybe_rollup_user_summary(
     from app.config import settings
     MAX_TURNS = getattr(settings, "summary_turn_window", 10)
 
-    # 최근 대화 전체 메시지 조회 (간단 구현)
+    # user_id 기준 전체 메시지 조회
+    from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
-        .where(Message.conv_id == conv_id)
+        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+        .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
     res = await session.execute(stmt)
@@ -176,7 +181,7 @@ async def maybe_rollup_user_summary(
             "- 기존 요약의 중요한 내용은 유지\n- 중복 문장 제거\n- 핵심만 간결히\n"
             f"\n[기존 사용자 요약]\n{existing_summary}\n\n[최근 대화]\n{history_text}"
         )
-        merged_text, _ = await ai_service.generate_response(session, conv_id, prompt, "default", user_id)
+        merged_text, _ = await ai_service.generate_response(session, None, prompt, "default", user_id)
     except Exception as e:
         logger.warning(f"롤업 요약 생성 실패: {e}")
         return
@@ -191,7 +196,6 @@ async def maybe_rollup_user_summary(
 async def upsert_user_summary_from_text(
     session: AsyncSession,
     user_id: str,
-    conv_id,
     summary_text: str,
 ) -> None:
     """CounselSummary 결과를 UserSummary에도 즉시 반영.
@@ -201,10 +205,12 @@ async def upsert_user_summary_from_text(
     if not summary_text:
         return
     us = await get_or_init_user_summary(session, user_id)
-    # 최근 3턴 추출
+    # 최근 3턴 추출 (user_id 기준)
+    from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
-        .where(Message.conv_id == conv_id)
+        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+        .where(DBConversation.user_id == user_id)
         .order_by(Message.created_at.asc())
     )
     res = await session.execute(stmt)

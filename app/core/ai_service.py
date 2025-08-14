@@ -86,6 +86,29 @@ class AIService:
         return messages
 
     @traceable
+    async def get_user_history(self, session: AsyncSession, user_id: str) -> List[Message]:
+        """user_id 기준으로 모든 대화 메시지를 시간순으로 반환합니다 (conv_id 변화 무관)."""
+        if not user_id:
+            return []
+        from app.database.models import Conversation as DBConversation
+        stmt = (
+            select(Message)
+            .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+            .where(DBConversation.user_id == user_id)
+            .order_by(Message.created_at.asc())
+        )
+        try:
+            result = await session.execute(stmt)
+        except Exception as e:
+            try:
+                await session.rollback()
+                result = await session.execute(stmt)
+            except Exception:
+                logger.warning(f"get_user_history failed after rollback: {e}")
+                return []
+        return list(result.scalars().all())
+
+    @traceable
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
         """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
         prompt_template = await self.get_active_prompt(session, prompt_name)
@@ -98,7 +121,7 @@ class AIService:
             "content": "아래의 이전 요약(있다면)과 대화 기록을 참고하여, 맥락에 맞는 답변을 제공하세요."
         })
 
-        # conv_id가 UUID일 때만 대화/요약 조회
+        # conv_id가 UUID일 때만 대화 히스토리 조회 (요약은 user_id로 조회)
         conv_uuid: UUID | None = None
         try:
             conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
@@ -133,7 +156,8 @@ class AIService:
         # 히스토리 구성 규칙
         # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송
         # - 요약이 있으면: 최근 3턴(=6 메시지)만 전송
-        history_messages: List[Message] = await self.get_conversation_history(session, conv_uuid or conv_id)
+        # 히스토리는 user_id 기준으로 조회해 conv_id 변경의 영향을 받지 않도록 함
+        history_messages: List[Message] = await self.get_user_history(session, target_user_id or "")
         if has_user_summary:
             max_pairs = 3
             max_msgs = max_pairs * 2
