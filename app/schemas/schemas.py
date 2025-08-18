@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
-# 카카???�킬 ?�답 ?�?�들
+# 카카오 스킬 응답 스키마들
 def simple_text(text: str) -> dict:
     return {
         "version": "2.0",
@@ -13,7 +13,7 @@ def simple_text(text: str) -> dict:
     }
 
 def card_response(title: str, description: str, thumbnail_url: str = None, buttons: list = None) -> dict:
-    """카드???�답"""
+    """카드형 응답"""
     card = {
         "title": title,
         "description": description
@@ -31,7 +31,7 @@ def card_response(title: str, description: str, thumbnail_url: str = None, butto
     }
 
 def quick_reply_response(text: str, quick_replies: list) -> dict:
-    """빠른 ?�장 ?�함 ?�답"""
+    """빠른 응답 포함 응답"""
     return {
         "version": "2.0",
         "template": {
@@ -40,8 +40,8 @@ def quick_reply_response(text: str, quick_replies: list) -> dict:
         }
     }
 
-def callback_waiting_response(message: str = "?��????�성 중입?�다...") -> dict:
-    """콜백 ?��??�답"""
+def callback_waiting_response(message: str = "답변을 생성 중입니다...") -> dict:
+    """콜백 대기 응답"""
     return {
         "version": "2.0",
         "useCallback": True,
@@ -51,12 +51,12 @@ def callback_waiting_response(message: str = "?��????�성 중입?�다...") -> di
     }
 
 class KakaoBody(BaseModel):
-    # 카카?��? 보내??바디�??��? 모델링할 ?�요???�음. ?�는 부분만!
-    # ?�킬 ?�스???�에??userRequest가 ?�락?????�어 Optional 처리
+    # 카카오가 보내는 바디를 모델링할 필요는 없음. 필요한 부분만!
+    # 스킬 테스트에서 userRequest가 누락될 수 있어 Optional 처리
     userRequest: Optional[dict] = None
     action: dict | None = None
 
-# ?�롬?�트 관리용 ?�키�?
+# 프롬프트 관리용 스키마
 class PromptTemplateCreate(BaseModel):
     name: str
     system_prompt: str
@@ -79,7 +79,7 @@ class PromptTemplateUpdate(BaseModel):
     description: Optional[str] = None
     user_prompt_template: Optional[str] = None
 
-# AI 처리 ?�업 관???�키�?
+# AI 처리 작업 관련 스키마
 class AIProcessingTaskResponse(BaseModel):
     task_id: UUID
     conv_id: UUID
