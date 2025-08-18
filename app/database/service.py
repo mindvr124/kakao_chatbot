@@ -5,12 +5,20 @@ from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
 
-async def upsert_user(session: AsyncSession, user_id: str) -> AppUser:
+async def upsert_user(session: AsyncSession, user_id: str, user_name: str | None = None) -> AppUser:
     try:
         user = await session.get(AppUser, user_id)
         if not user:
-            user = AppUser(user_id=user_id)
+            user = AppUser(user_id=user_id, user_name=user_name)
             session.add(user)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            await session.refresh(user)
+        elif user_name is not None:  # 이름이 제공되면 업데이트
+            user.user_name = user_name
             try:
                 await session.commit()
             except Exception:

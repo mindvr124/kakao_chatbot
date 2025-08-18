@@ -381,13 +381,9 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
         if name:
             # 이름이 추출되면 저장
             try:
-                user = await session.get(AppUser, user_id)
-                if user:
-                    user.user_name = name
-                    await session.commit()
-                    response_text = f"반가워 {name}아(야)! 앞으로 {name}(이)라고 부를게🦉"
-                else:
-                    response_text = random.choice(_WELCOME_MESSAGES)
+                # 사용자 생성/업데이트
+                await upsert_user(session, user_id, name)
+                response_text = f"반가워 {name}아(야)! 앞으로 {name}(이)라고 부를게🦉"
             except Exception as e:
                 logger.error(f"Failed to save user name: {e}")
                 response_text = random.choice(_WELCOME_MESSAGES)
