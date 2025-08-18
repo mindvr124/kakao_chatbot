@@ -18,11 +18,11 @@ from app.utils.utils import remove_markdown
 
 class AIService:
     def __init__(self):
-        # 환경 변수에서 직접 API 키 가져오기
+        # 환경 변수에서 직접 API 키를 가져오기
         api_key = os.getenv('OPENAI_API_KEY') or settings.openai_api_key
         if not api_key:
             logger.warning("OpenAI API key not found in environment variables")
-            api_key = "dummy_key"  # 임시 키로 초기화
+            api_key = "dummy_key"  # 임시로 초기화
             
         self.client = AsyncOpenAI(
             api_key=api_key
@@ -30,7 +30,7 @@ class AIService:
         self.model = settings.openai_model
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
-        self.default_system_prompt = """당신은 전문 AI 심리상담가입니다. 친근하고 공감적인 톤으로 간결하게 답변하세요. 지금까지의 대화 내용과 아래 요약을 우선 참고하여, 맥락에 맞게 대화를 이어가세요."""
+        self.default_system_prompt = """당신은 전문 AI 심리상담가입니다. 친근하고 공감적인 말로 간결하게 답변하세요. 지금까지의 대화 내용은 아래 요약을 먼저 참고하여, 맥락에 맞게 대화를 이어가세요."""
 
     @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
@@ -87,7 +87,7 @@ class AIService:
 
     @traceable
     async def get_user_history(self, session: AsyncSession, user_id: str) -> List[Message]:
-        """user_id 기준으로 모든 대화 메시지를 시간순으로 반환합니다 (conv_id 변화 무관)."""
+        """user_id 기준으로 모든 대화 메시지를 시간순으로 반환합니다(conv_id 변경 무관)."""
         if not user_id:
             return []
         from app.database.models import Conversation as DBConversation
@@ -115,21 +115,35 @@ class AIService:
         system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
 
         messages: List[dict] = [{"role": "system", "content": system_prompt}]
-        # 맥락 활용 지시를 명시적으로 추가
+
+        # 사용자 이름이 있으면 추가
+        if target_user_id:
+            try:
+                from app.database.models import AppUser
+                user = await session.get(AppUser, target_user_id)
+                if user and user.user_name:
+                    messages.append({
+                        "role": "system",
+                        "content": f"내담자의 이름은 {user.user_name}입니다. 무조건 기억 하고 대화 중 이름을 되묻지 마세요."
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get user name: {e}")
+
+        # 맥락 내용 지시를 명시적으로 추가
         messages.append({
             "role": "system",
-            "content": "아래의 이전 요약(있다면)과 대화 기록을 참고하여, 맥락에 맞는 답변을 제공하세요."
+            "content": "아래는 이전 요약(지난번 대화 기록)을 참고하여, 맥락에 맞는 답변을 제공하세요"
         })
 
-        # conv_id가 UUID일 때만 대화 히스토리 조회 (요약은 user_id로 조회)
+        # conv_id가 UUID일때만 대화 히스토리 조회 (요약용 user_id도 조회)
         conv_uuid: UUID | None = None
         try:
             conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
         except Exception:
             conv_uuid = None
 
-        # 사용자 요약 조회 (있으면 사용, 없으면 폴백 없음도 허용)
-        # 항상 appuser의 user_id를 우선 사용 (conv_id는 보조)
+        # 사용자 요약 조회 (있으면 사용, 없으면 폴백 없이 진행)
+        # 단, appuser의 user_id를 우선 사용 (conv_id는 보조)
         target_user_id: Optional[str] = user_id
         conversation: Conversation | None = None
         if not target_user_id and conv_uuid is not None:
@@ -161,7 +175,7 @@ class AIService:
                     logger.warning(f"get_or_init_user_summary failed after rollback: {e}")
                     user_summary_text = None
 
-        # 요약이 존재하면 무조건 포함 (공백 제거 후 판단)
+        # ?�약??존재?�면 무조�??�함 (공백 ?�거 ???�단)
         summary_text_clean = (user_summary_text or "").strip()
         has_user_summary = bool(summary_text_clean)
         if has_user_summary:
@@ -174,7 +188,7 @@ class AIService:
             except Exception:
                 pass
         else:
-            # CounselSummary 폴백 시도
+            # CounselSummary ?�백 ?�도
             fallback_summary = None
             try:
                 fallback_summary = await get_last_counsel_summary(session, target_user_id or "")
@@ -201,8 +215,8 @@ class AIService:
                     pass
 
         # 히스토리 구성 규칙
-        # - 요약이 없으면: 대화 시작부터 누적하여 최대 20 메시지 전송
-        # - 요약이 있으면: 최근 3턴(=6 메시지)만 전송
+        # - 요약이 없으면 대화 시작부터 누적하여 최대 20 메시지 전송
+        # - 요약이 있으면 최근 3쌍(=6 메시지)만 전송
         # 히스토리는 user_id 기준으로 조회해 conv_id 변경의 영향을 받지 않도록 함
         history_messages: List[Message] = await self.get_user_history(session, target_user_id or "")
         if has_user_summary:
@@ -215,11 +229,11 @@ class AIService:
             if len(history_messages) > max_window:
                 history_messages = history_messages[-max_window:]
         for m in history_messages:
-            # Enum은 value로 안전하게 추출
+            # Enum의 value를 안전하게 추출
             role_value = getattr(m.role, "value", None) or (m.role if isinstance(m.role, str) else str(m.role))
             role_value = str(role_value).lower()
             if role_value not in ("user", "assistant", "system"):
-                # 예상치 못한 값 방어: 기본은 user/assistant로 폴백
+                # 예상치 못한 값 방어: 기본값 user/assistant로 폴백
                 role_value = "user" if "user" in role_value else "assistant"
             messages.append({"role": role_value, "content": m.content})
 
@@ -230,7 +244,7 @@ class AIService:
 
     @traceable
     async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> tuple[str, int]:
-        """Chat Completions에 전체 히스토리와 요약(있다면)을 포함해 응답을 생성합니다."""
+        """Chat Completions로 전체 히스토리와 요약(지난번 대화)을 포함한 답변을 생성합니다."""
         try:
             messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
 
@@ -243,7 +257,7 @@ class AIService:
             except Exception:
                 pass
 
-            # 동적 max_tokens 산정
+            # 동적 max_tokens 설정
             max_tokens = self.max_tokens
             if settings.openai_dynamic_max_tokens:
                 try:
@@ -265,7 +279,7 @@ class AIService:
             content = response.choices[0].message.content or ""
             tokens_used = response.usage.total_tokens if response.usage else 0
 
-            # 잘림(unfinished) 감지 및 이어쓰기
+            # 잘림(unfinished) 감지 및 이어받기
             def _is_truncated(resp) -> bool:
                 try:
                     finish_reason = resp.choices[0].finish_reason
@@ -280,7 +294,7 @@ class AIService:
                 segments += 1
                 follow_messages = messages + [
                     {"role": "assistant", "content": accumulated[-2000:]},
-                    {"role": "user", "content": "이어서 계속 작성해 주세요."},
+                    {"role": "user", "content": "이어서 계속 생성해 주세요"},
                 ]
                 last_resp = await self.client.chat.completions.create(
                     model=self.model,
@@ -307,19 +321,19 @@ class AIService:
 
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
-            return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", 0
+            return "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요.", 0
 
     async def generate_simple_response(self, user_input: str) -> str:
-        """데이터베이스 없이 간단한 AI 응답을 생성합니다."""
+        """데이터베이스 없이 간단한 AI 답변을 생성합니다"""
         try:
-            # API 키가 없으면 기본 응답
+            # API 키가 없으면 기본 답변
             api_key = os.getenv('OPENAI_API_KEY') or settings.openai_api_key
             if not self.client or not api_key:
                 return f"안녕하세요! '{user_input}'에 대해 문의해주셔서 감사합니다. 무엇을 도와드릴까요?"
             
             # 간단한 시스템 프롬프트
-            system_prompt = """당신은 친근하고 도움이 되는 AI 상담사입니다. 
-한국어로 자연스럽게 대화하고, 사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요."""
+            system_prompt = """당신은 친근하고 공감하는 AI 상담사입니다. 
+한국어로 자연스럽게 대화하며 사용자의 질문에 정확하고 공감하는 답변을 제공하세요."""
             
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -342,7 +356,7 @@ class AIService:
             
         except Exception as e:
             logger.error(f"Error generating simple AI response: {e}")
-            return f"안녕하세요! '{user_input}'에 대해 문의해주셔서 감사합니다. 현재 일시적인 문제가 있어 자세한 답변을 드리지 못하지만, 곧 해결될 예정입니다."
+            return f"안녕하세요! '{user_input}'에 대해 문의해주셔서 감사합니다. 현재 일시적인 문제가 있어 자세한 답변을 드리지 못하지만 곧 해결될 예정입니다."
 
 # 전역 AI 서비스 인스턴스
 ai_service = AIService()

@@ -83,7 +83,7 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
 
 
 async def _save_ai_response_background(conv_id: str, final_text: str, tokens_used: int, request_id: str | None, user_id: str | None = None):
-    """백그라운드에서 AI 응답을 DB에 저장합니다."""
+    """백그라운드에서 AI 답변을 DB에 저장합니다."""
     try:
         logger.bind(x_request_id=request_id).info(f"Saving AI response to DB in background")
         
@@ -174,7 +174,7 @@ def send_kakao_callback(callback_url, final_answer):
     }
     try:
         headers = {"Content-Type": "application/json; charset=utf-8"}
-        # 카카오 콜백은 프록시/인증서 이슈가 있을 수 있어, 리다이렉트/검증 설정을 명시적으로 지정
+        # 카카오 콜백은 종종 인증이나 이슈가 있을 수 있어, 리다이렉트 검사 옵션을 명시적으로 지정
         response = requests.post(
             callback_url,
             json=callback_data,
@@ -192,7 +192,7 @@ def send_kakao_callback(callback_url, final_answer):
 
 
 async def _send_callback_response(callback_url: str, message: str, tokens: int, request_id: str | None):
-    """콜백 URL로 응답을 전송합니다. (기존 비동기 방식 유지)"""
+    """콜백 URL로 답변을 전송합니다 (기존 비동기 방식 유지)"""
     try:
         # 새로운 동기 함수 사용
         import asyncio
@@ -210,7 +210,7 @@ async def _send_callback_response(callback_url: str, message: str, tokens: int, 
 
 
 async def _process_ai_with_callback(callback_url: str, task_id: str, request_id: str | None):
-    """콜백을 통해 AI 처리를 수행하고 결과를 전송합니다."""
+    """콜백을 통해 AI 처리를 수행하고 결과를 전송합니다"""
     try:
         logger.bind(x_request_id=request_id).info(f"Starting AI processing with callback for task: {task_id}")
         
@@ -223,13 +223,13 @@ async def _process_ai_with_callback(callback_url: str, task_id: str, request_id:
             if success:
                 logger.bind(x_request_id=request_id).info(f"AI processing completed for task: {task_id}, sending callback")
                 
-                # 콜백으로 최종 응답 전송
+                # 콜백으로 최종 답변 전송
                 await _send_callback_response(callback_url, result, tokens, request_id)
             else:
                 logger.bind(x_request_id=request_id).error(f"AI processing failed for task: {task_id}: {result}")
                 
                 # 실패 시에도 콜백으로 에러 메시지 전송
-                error_message = "죄송합니다. AI 응답 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
+                error_message = "죄송합니다. AI 답변 생성에 실패했습니다. 다시 한 번 시도해주세요."
                 await _send_callback_response(callback_url, error_message, 0, request_id)
             break
             
@@ -238,14 +238,14 @@ async def _process_ai_with_callback(callback_url: str, task_id: str, request_id:
         
         # 예외 발생 시에도 콜백으로 에러 메시지 전송
         try:
-            error_message = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            error_message = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
             await _send_callback_response(callback_url, error_message, 0, request_id)
         except Exception as callback_error:
             logger.bind(x_request_id=request_id).exception(f"Failed to send error callback: {callback_error}")
 
 
 async def _process_ai_background(task_id: str, request_id: str | None):
-    """백그라운드에서 AI 처리를 수행합니다."""
+    """백그라운드에서 AI 처리를 수행합니다"""
     try:
         logger.bind(x_request_id=request_id).info(f"Starting background AI processing for task: {task_id}")
         
@@ -264,13 +264,13 @@ async def _process_ai_background(task_id: str, request_id: str | None):
     except Exception as e:
         logger.bind(x_request_id=request_id).exception(f"Background AI processing error for task {task_id}: {e}")
 
-# --- 세션 비활성 감시 및 요약 저장 ---
+# --- 세션 비활성 감시 및 요약 처리 ---
 _last_activity_map: dict[str, datetime] = {}
 _watcher_task = None
 _inactivity_seconds = 120  # 2분
 
 def update_last_activity(conv_id: str | None):
-    """유효한 UUID conv_id만 기록. temp_* 등은 무시"""
+    """유효한 UUID conv_id를 기록. temp_* 접두어는 무시"""
     if not conv_id:
         return
     try:
@@ -278,13 +278,13 @@ def update_last_activity(conv_id: str | None):
         _ = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
     except Exception:
         return
-    _last_activity_map[str(conv_id)] = datetime.utcnow()
+    _last_activity_map[str(conv_id)] = datetime.now()
 
 async def _watch_sessions_loop():
     global _watcher_task
     try:
         while True:
-            now = datetime.utcnow()
+            now = datetime.now()
             stale = [cid for cid, ts in list(_last_activity_map.items()) if (now - ts).total_seconds() > _inactivity_seconds]
             for conv_id in stale:
                 try:
@@ -318,7 +318,7 @@ async def _summarize_and_close(conv_id: str):
             if not conv:
                 return
             user_id = conv.user_id
-            # 전체 히스토리(user_id 기준) 기반 요약 생성 후 UserSummary에 반영
+            # 전체 히스토리(user_id 기준) 기반 요약 생성 및 UserSummary에 반영
             try:
                 prev_summary = ""
                 try:
@@ -361,7 +361,7 @@ async def _summarize_and_close(conv_id: str):
                     await save_event_log(session, "summary_failed", user_id, conv_uuid, None, {"error": str(e)[:300]})
                 except Exception:
                     pass
-            # 10턴 롤업도 병행 시도 (중복 시 최신값 유지)
+            # 10개 롤업도 병행 시도 (중복 시 최신것 사용)
             try:
                 try:
                     await maybe_rollup_user_summary(session, user_id, conv_uuid)

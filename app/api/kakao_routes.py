@@ -1,5 +1,3 @@
-"""카카오 스킬 관련 라우터"""
-import asyncio
 from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -8,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log
+from app.database.models import AppUser
 from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
 from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity, _send_callback_response
@@ -16,8 +15,41 @@ from app.main import http_client, BUDGET, ENABLE_CALLBACK
 import time
 import asyncio
 
-router = APIRouter()
+"""카카오 스킬 관련 라우터"""
+import asyncio
+import random
+import re
 
+# 이름 추출을 위한 정규식 패턴들
+_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저)\s*', re.IGNORECASE)
+_NAME_SUFFIX_PATTERN = re.compile(r'\s*(입니다|이에요|예요|에요|야|이야|라고\s*해|라고\s*해요|이라고\s*해|이라고\s*해요|합니다|불러|불러줘|라고\s*불러|라고\s*불러줘|이라고\s*불러|이라고\s*불러줘)\.?$', re.IGNORECASE)
+_KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
+
+# 웰컴 메시지 템플릿
+_WELCOME_MESSAGES = [
+    "안녕~ 난 나온이야🦉 너는 이름이 뭐야?",
+    "안녕~ 난 나온이야🦉 내가 뭐라고 부르면 좋을까?",
+    "안녕~ 난 나온이야🦉 네 이름이 궁금해. 알려줘~!"
+]
+
+def extract_korean_name(text: str) -> str | None:
+    """사용자 입력에서 한글 이름을 추출합니다."""
+    # 입력 정규화
+    text = text.strip()
+    if not text:
+        return None
+        
+    # 앞뒤 패턴 제거
+    text = _NAME_PREFIX_PATTERN.sub('', text)
+    text = _NAME_SUFFIX_PATTERN.sub('', text)
+    
+    # 남은 텍스트에서 한글 이름 패턴 찾기
+    match = _KOREAN_NAME_PATTERN.search(text)
+    if match:
+        return match.group()
+    return None
+    
+router = APIRouter()
 
 @router.post("/skill")
 @router.post("/skill/")
@@ -25,16 +57,16 @@ async def skill_endpoint(
     request: Request,
     session: AsyncSession = Depends(get_session)
 ):
-    # 최우선 로그 - 요청이 들어왔다는 것부터 확인
+    # 최우선 로그 - 요청이 들어왔다는 것만 확인
     print(f"=== SKILL REQUEST RECEIVED ===")
     logger.info("=== SKILL REQUEST RECEIVED ===")
     
     try:
-        # 1) 헤더 추적값
+        # 1) 헤더 추적자
         x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
         logger.bind(x_request_id=x_request_id).info("Incoming skill request")
 
-        # 전체 요청 시간 추적 (카카오 5초 제한 대비)
+        # 전체 요청 시간 추적 (카카오 5초 제한 준수)
         t0 = time.perf_counter()
 
         try:
@@ -46,7 +78,7 @@ async def skill_endpoint(
             logger.warning(f"JSON parse failed: {parse_err}")
             body_dict = {}
         
-        # 디버깅: 받은 데이터 로깅
+        # 서버가 받은 데이터 로깅
         logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
         
         user_id = extract_user_id(body_dict)
@@ -62,18 +94,18 @@ async def skill_endpoint(
         logger.bind(x_request_id=x_request_id).info(f"Extracted callback_url: {callback_url}")
 
         # 2) 콜백 요청이면 즉시 응답 후 비동기 콜백 (DB 이전)
-        # 3) 유저 발화 추출 (Optional userRequest 방어)
+        # 3) 사용자 발화 추출 (Optional userRequest 방어)
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
-        # trace_id는 X-Request-ID만 사용 (메모리/대화 히스토리 기능 롤백)
+        # trace_id는 X-Request-ID를 사용 (메모리 기반 히스토리 기능 롤백)
         trace_id = x_request_id
         if not isinstance(user_text, str):
             user_text = str(user_text or "")
         if not user_text:
-            # 카카오 스펙 검사 시 빈 발화로 호출될 수 있어 기본값 제공
+            # 카카오 스펙 검증용 빈 발화가 들어올 수 있어 기본값 제공
             user_text = "안녕하세요"
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
-            # 하이브리드: 4.5초 내 완료 시 즉시 최종 응답, 아니면 콜백 대기 응답 후 콜백 2회(대기/최종)
+            # 하이브리드: 4.5초내 완료 시 즉시 최종 응답, 아니면 콜백 대기 응답 후 콜백 2회(대기+최종)
             elapsed = time.perf_counter() - t0
             time_left = max(0.2, 4.5 - elapsed)
             try:
@@ -141,7 +173,7 @@ async def skill_endpoint(
             except Exception:
                 pass
 
-            # 시간 내 미완료 → 즉시 콜백 대기 응답 반환, 백그라운드에서 '대기 콜백' → '최종 콜백' 순으로 전송
+            # 시간 내 미완료시 즉시 콜백 대기 응답 반환, 백그라운드에서 '대기 콜백' 후 '최종 콜백' 순으로 전송
             immediate = callback_waiting_response("답변을 생성 중입니다...")
             try:
                 await save_event_log(session, "callback_waiting_sent", user_id, None, x_request_id, None)
@@ -149,10 +181,10 @@ async def skill_endpoint(
                 pass
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
-                final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+                final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
                 tokens_used: int = 0
                 try:
-                    # 내부에서 독립 세션으로 모든 무거운 작업 처리
+                    # 여기서 독립 세션으로 모든 무거운 작업 처리
                     async for s in get_session():
                         try:
                             # DB 작업은 타임아웃 가드로 감쌉니다 (카카오 5초 제한 보호)
@@ -207,7 +239,7 @@ async def skill_endpoint(
                 pass
             return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
 
-        # 4) 즉시응답 경로만 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
+        # 4) 즉시응답 경로로 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
         try:
             async def _ensure_conv_main():
                 try:
@@ -234,7 +266,7 @@ async def skill_endpoint(
             logger.warning(f"DB ops failed in immediate path: {db_err}")
             conv_id = f"temp_{user_id}"
 
-        # 5) 콜백이 아닌 경우: AI 응답 생성 (BUDGET 적용)
+        # 5) 콜백이 아닌 경우: AI 답변 생성 (BUDGET 적용)
         try:
             logger.info(f"Generating AI response for: {user_text}")
             try:
@@ -250,17 +282,17 @@ async def skill_endpoint(
                 )
             except asyncio.TimeoutError:
                 logger.warning("AI generation timeout. Falling back to canned message.")
-                final_text, tokens_used = ("잠시만요! 답변 생성이 길어져 간단히 안내드려요 🙏", 0)
+                final_text, tokens_used = ("잠시만요! 답변 생성이 길어져서 간단히 안내드려요", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
             try:
                 await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
                 pass
             
-            # 메시지 저장 시도 (DB 장애 등으로 temp일 수 있음)
+            # 메시지 저장 시도 (DB 장애 없으면 temp는 없음)
             try:
                 if not str(conv_id).startswith("temp_"):
-                    # 기존 방식: conv_id가 유효할 때 바로 저장
+                    # 기존 방식: conv_id가 유효하면 바로 저장
                     asyncio.create_task(_save_user_message_background(
                         conv_id, user_text, x_request_id, user_id
                     ))
@@ -300,7 +332,7 @@ async def skill_endpoint(
             logger.error(f"AI generation failed: {ai_error}")
             import traceback
             logger.error(f"Full traceback: {traceback.format_exc()}")
-            final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+            final_text = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
             
             return JSONResponse(content={
                 "version": "2.0",
@@ -309,13 +341,71 @@ async def skill_endpoint(
         
     except Exception as e:
         logger.exception(f"Error in skill endpoint: {e}")
-        # 카카오 스펙 준수 기본 본문과 함께 200 OK로 내려 400 회피
-        safe_text = "일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
+        # 카카오 스펙 준수: 기본 본문과 함께 200 OK를 내려 400 회피
+        safe_text = "일시적인 오류가 발생했어요. 다시 한 번 시도해 주세요"
         return JSONResponse(content={
             "version": "2.0",
             "template": {"outputs":[{"simpleText":{"text": safe_text}}]}
         }, media_type="application/json; charset=utf-8")
 
+
+@router.post("/welcome")
+async def welcome_skill(request: Request, session: AsyncSession = Depends(get_session)):
+    """웰컴 스킬: 사용자 이름을 받아서 저장합니다."""
+    try:
+        # 1) 요청 처리
+        x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+        logger.bind(x_request_id=x_request_id).info("Incoming welcome skill request")
+        
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+        except Exception as parse_err:
+            logger.warning(f"JSON parse failed: {parse_err}")
+            body = {}
+            
+        # 2) 사용자 ID 추출
+        user_id = extract_user_id(body)
+        if not user_id:
+            anon_suffix = x_request_id or "unknown"
+            user_id = f"anonymous:{anon_suffix}"
+            
+        # 3) 사용자 발화 추출
+        user_text = (body.get("userRequest") or {}).get("utterance", "")
+        if not isinstance(user_text, str):
+            user_text = str(user_text or "")
+            
+        # 4) 이름 추출 시도
+        name = extract_korean_name(user_text)
+        if name:
+            # 이름이 추출되면 저장
+            try:
+                user = await session.get(AppUser, user_id)
+                if user:
+                    user.user_name = name
+                    await session.commit()
+                    response_text = f"반가워 {name}아(야)! 앞으로 {name}(이)라고 부를게🦉"
+                else:
+                    response_text = random.choice(_WELCOME_MESSAGES)
+            except Exception as e:
+                logger.error(f"Failed to save user name: {e}")
+                response_text = random.choice(_WELCOME_MESSAGES)
+        else:
+            # 이름이 없으면 웰컴 메시지
+            response_text = random.choice(_WELCOME_MESSAGES)
+            
+        return JSONResponse(content={
+            "version": "2.0",
+            "template": {"outputs": [{"simpleText": {"text": response_text}}]}
+        }, media_type="application/json; charset=utf-8")
+        
+    except Exception as e:
+        logger.exception(f"Error in welcome skill: {e}")
+        return JSONResponse(content={
+            "version": "2.0",
+            "template": {"outputs": [{"simpleText": {"text": random.choice(_WELCOME_MESSAGES)}}]}
+        }, media_type="application/json; charset=utf-8")
 
 @router.post("/test-skill")
 async def test_skill_endpoint(request: Request):

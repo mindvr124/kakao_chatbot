@@ -25,7 +25,7 @@ class AIProcessingService:
         session: AsyncSession, 
         task_id: str
     ) -> bool:
-        """AI 처리 작업을 시작합니다."""
+        """AI 처리 작업을 시작합니다"""
         try:
             logger.info("AI task queue disabled: start_processing no-op")
             return False
@@ -41,7 +41,7 @@ class AIProcessingService:
         result_message_id: str,
         tokens_used: int = 0
     ) -> bool:
-        """AI 처리 작업을 완료합니다."""
+        """AI 처리 작업을 완료합니다"""
         try:
             logger.info("AI task queue disabled: complete_processing no-op")
             return False
@@ -57,7 +57,7 @@ class AIProcessingService:
         error_message: str,
         should_retry: bool = True
     ) -> bool:
-        """AI 처리 작업을 실패 처리합니다."""
+        """AI 처리 작업 실패를 처리합니다"""
         try:
             # 재시도 여부 결정
             if should_retry:
@@ -77,7 +77,7 @@ class AIProcessingService:
         session: AsyncSession, 
         task_id: str
     ) -> Optional[object]:
-        """작업 상태를 조회합니다."""
+        """작업 상태를 조회합니다"""
         logger.info("AI task queue disabled: get_task_status no-op")
         return None
     
@@ -87,7 +87,7 @@ class AIProcessingService:
         task_id: str,
         prompt_name: str = "default"
     ) -> Tuple[bool, Optional[str], Optional[int]]:
-        """AI 작업을 실제로 처리합니다."""
+        """AI 작업을 실제로 처리합니다"""
         logger.info("AI task queue disabled: process_ai_task no-op")
         return False, "queue disabled", None
 

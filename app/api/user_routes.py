@@ -1,4 +1,4 @@
-"""사용자 API 라우터"""
+"""?�용??API ?�우??""
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,8 +17,8 @@ async def get_ai_processing_status(
     task_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """AI 처리 상태를 조회합니다."""
-    # AIProcessingTask 제거됨 → 고정 응답
+    """AI 처리 ?�태�?조회?�니??"""
+    # AIProcessingTask ?�거????고정 ?�답
     return AIProcessingStatusResponse(task_id=task_id, status="disabled", created_at=None, retry_count=0)
 
 
@@ -27,9 +27,9 @@ async def get_latest_ai_response(
     conv_id: str,
     session: AsyncSession = Depends(get_session)
 ):
-    """대화에서 가장 최근 AI 응답을 조회합니다."""
+    """?�?�에??가??최근 AI ?�답??조회?�니??"""
     try:
-        # 가장 최근 AI 응답 조회
+        # 가??최근 AI ?�답 조회
         stmt = (
             select(Message)
             .where(Message.conv_id == conv_id)

@@ -26,8 +26,8 @@ async def upsert_user(session: AsyncSession, user_id: str) -> AppUser:
         raise
 
 async def get_or_create_conversation(session: AsyncSession, user_id: str) -> Conversation:
-    """항상 최신 대화를 재사용. 없으면 새로 생성.
-    기존의 세션 타임아웃 기반 신규 생성은 제거한다.
+    """가장 최신 대화가 만료된 경우에만 새로 생성.
+    기존의 세션 만료 여부를 기반으로 신규 생성을 결정한다.
     """
     try:
         stmt = (
@@ -214,7 +214,7 @@ async def create_prompt_template(
     user_prompt_template: str | None = None,
     created_by: str | None = None
 ) -> PromptTemplate:
-    """새로운 프롬프트 템플릿을 생성합니다."""
+    """새로운 프롬프트 템플릿을 생성합니다"""
     # 기존 프롬프트가 있다면 비활성화
     existing_stmt = select(PromptTemplate).where(PromptTemplate.name == name, PromptTemplate.is_active == True)
     try:
@@ -229,7 +229,7 @@ async def create_prompt_template(
     if existing_prompts:
         max_version = max(p.version for p in existing_prompts)
         version = max_version + 1
-        # 기존 활성 프롬프트들 비활성화
+        # 기존 활성 프롬프트는 비활성화
         for prompt in existing_prompts:
             prompt.is_active = False
     
@@ -282,12 +282,12 @@ async def get_prompt_template_by_name(session: AsyncSession, name: str) -> Optio
     return result.scalar_one_or_none()
 
 async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> bool:
-    """특정 프롬프트 템플릿을 활성화합니다."""
+    """지정된 프롬프트 템플릿을 활성화합니다."""
     prompt = await session.get(PromptTemplate, prompt_id)
     if not prompt:
         return False
     
-    # 같은 이름의 다른 프롬프트들 비활성화
+    # 같은 이름의 다른 프롬프트는 비활성화
     stmt = select(PromptTemplate).where(PromptTemplate.name == prompt.name, PromptTemplate.is_active == True)
     try:
         result = await session.execute(stmt)
@@ -299,7 +299,7 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
     for existing in existing_prompts:
         existing.is_active = False
     
-    # 선택한 프롬프트 활성화
+    # 선택된 프롬프트 활성화
     prompt.is_active = True
     try:
         await session.commit()

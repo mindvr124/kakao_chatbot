@@ -12,29 +12,29 @@ class SummaryResponse:
 
 def _build_summary_prompt(history: str, summary_text: str) -> list[dict]:
     instruction = (
-        "다음 상담 대화 기록을 요약하세요. 사용자 이름, 상담 이유, 핵심 내용을 빠짐 없이 중복이 없도록 작성하세요. "
-        "기존 요약이 있다면 삭제하지 말고 덧붙여 업데이트하세요. 무의미한 대화나 인사만 있는 경우에는 원문을 그대로 작성하세요."
+        """다음은 현재 진행중인 상담의 대화 기록입니다. 
+        내담자의 심리 상태, 상담 이유와 그에 관련된 핵심 내용을 중복이 없도록 요약해 주세요.
+        이전 요약 대화에서 중요한 내용은 삭제하지 말고 덧붙여서 요약해주세요.
+        사용자의 이름은 요약에서 제외하고, 대신 '내담자'로 표현해주세요.
+
+        무의미한 대화나 인사만 있는 경우 요약하지 말고 받은 데이터를 그대로 보내주세요."""
     )
     user_content = (
         f"[이전 요약]\n{summary_text or ''}\n\n[대화]\n{history}"
     )
     return [
-        {"role": "system", "content": "당신은 상담 대화 내용을 정확히 요약하는 비서입니다."},
+        {"role": "system", "content": "당신은 상담 대화 내용을 정확히 요약하는 비서입니다"},
         {"role": "user", "content": f"{instruction}\n\n{user_content}"},
     ]
 
 async def generate_summary(llm_or_client, history: str, summary_text: str) -> SummaryResponse:
-    """LangChain 없이 OpenAI 클라이언트로 요약을 생성합니다.
-
-    llm_or_client: ai_service.client(OpenAI) 또는 openai.AsyncOpenAI/Sync OpenAI 호환 객체
-    """
     try:
-        # AsyncOpenAI / OpenAI 모두 지원 시도
+        # AsyncOpenAI / OpenAI 모두 지원하도록
         messages = _build_summary_prompt(history, summary_text)
         # 동기/비동기 클라이언트 분기 처리
         create_fn = getattr(getattr(llm_or_client, "chat", None), "completions", None)
         if create_fn is None:
-            # Responses API만 있을 경우 간단히 chat 호환으로 생성
+            # Responses API를 쓸 경우 간단히 chat 반환으로 생성
             responses_create = getattr(llm_or_client, "responses", None)
             if responses_create is None:
                 raise RuntimeError("지원되지 않는 LLM 클라이언트 타입입니다.")
@@ -42,10 +42,10 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
                 model="gpt-4o-mini",
                 input=messages,
             )
-            content = getattr(resp, "output_text", "") or "요약을 생성하지 못했습니다."
+            content = getattr(resp, "output_text", "") or "요약을 생성하지 못했습니다"
             return SummaryResponse(content)
 
-        # Async 여부 판별
+        # Async 여부 구별
         if hasattr(create_fn, "create"):
             # async client
             resp = await llm_or_client.chat.completions.create(
@@ -68,7 +68,7 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
             return SummaryResponse(content)
     except Exception as e:
         logger.warning(f"generate_summary 실패: {e}")
-        return SummaryResponse("요약을 생성하지 못했습니다.")
+        return SummaryResponse("요약을 생성하지 못했습니다")
 
 async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
     if not user_id:
@@ -97,7 +97,7 @@ async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
     return "\n".join(lines)
 
 async def save_counsel_summary(session: AsyncSession, user_id: str, conv_id, content: str) -> Optional[CounselSummary]:
-    """요약을 conv_id 단위로 upsert. 이미 존재하면 내용과 시간만 갱신(덮어쓰기)."""
+    """요약을 conv_id 단위로 upsert. 이미 존재하면 내용과 시간을 갱신(덮어쓰기)."""
     if not content or len(content.strip()) < 30:
         return None
     # conv_id로 기존 요약 조회
@@ -121,7 +121,7 @@ async def save_counsel_summary(session: AsyncSession, user_id: str, conv_id, con
         existing.content = content.strip()
         # created_at을 최신으로 갱신(별도 updated_at 컬럼 없이 요구사항 충족)
         from datetime import datetime
-        existing.created_at = datetime.utcnow()
+        existing.created_at = datetime.now()
         try:
             await session.commit()
         except Exception:
@@ -185,9 +185,9 @@ async def maybe_rollup_user_summary(
     user_id: str,
     new_messages: list[Message] | None = None,
 ) -> None:
-    """사용자 단위 롤업 요약 (10턴 기준). 조건 만족 시에만 요약 업데이트.
-    - 임계치: 마지막 롤업 이후 신규 메시지가 MAX_TURNS(기본 10) 이상일 때
-    - 포함 내용: 최근 MAX_TURNS 메시지 기반으로 기존 요약에 병합
+    """사용자 단위 롤업 요약 (10개 기준). 조건 만족 시에만 요약 업데이트.
+    - 누계된 마지막 롤업 이후 신규 메시지가 MAX_TURNS(기본 10) 이상일때
+    - 포함 내용: 최근 MAX_TURNS 메시지 기반으로 기존 요약과 병합
     """
     from app.config import settings
     MAX_TURNS = getattr(settings, "summary_turn_window", 10)
@@ -213,11 +213,11 @@ async def maybe_rollup_user_summary(
     if not msgs:
         return
 
-    # 사용자 요약 엔트리 확보
+    # 사용자 요약 메타 정보
     us = await get_or_init_user_summary(session, user_id)
     last_ptr = us.last_message_created_at
 
-    # 트리거 조건 계산: 마지막 포인터 이후 신규 메시지 수
+    # 처리할 조건 계산: 마지막 체인지 이후 신규 메시지 수
     if last_ptr is None:
         new_count = len(msgs)
     else:
@@ -245,7 +245,7 @@ async def maybe_rollup_user_summary(
     from app.core.ai_service import ai_service
     try:
         prompt = (
-            "아래 최근 대화(MAX_TURNS)를 기존 사용자 요약과 중복 없이 병합하여 새로운 사용자 요약으로 업데이트하세요.\n"
+            "아래 최근 대화(MAX_TURNS)와 기존 사용자 요약을 중복 없이 병합하여 새로운 사용자 요약으로 업데이트하세요.\n"
             "- 기존 요약의 중요한 내용은 유지\n- 중복 문장 제거\n- 핵심만 간결히\n"
             f"\n[기존 사용자 요약]\n{existing_summary}\n\n[최근 대화]\n{history_text}"
         )
@@ -258,11 +258,11 @@ async def maybe_rollup_user_summary(
             pass
         return
 
-    # 사용자 요약과 마지막 메시지 시간 갱신
+    # ?�용???�약�?마�?�?메시지 ?�간 갱신
     us.summary = (merged_text or existing_summary).strip()
     us.last_message_created_at = msgs[-1].created_at
     from datetime import datetime
-    us.updated_at = datetime.utcnow()
+    us.updated_at = datetime.now()
     try:
         await session.commit()
     except Exception:
@@ -279,13 +279,13 @@ async def upsert_user_summary_from_text(
     summary_text: str,
 ) -> None:
     """CounselSummary 결과를 UserSummary에도 즉시 반영.
-    - 마지막 3턴을 carryover로 저장
+    - 마지막 3개를 carryover로 유지
     - last_message_created_at 포인터 갱신
     """
     if not summary_text:
         return
     us = await get_or_init_user_summary(session, user_id)
-    # 최근 메시지 시각만 갱신 (carryover 저장 컬럼 제거)
+    # 최근 메시지 포인터 갱신 (carryover 관련 컬럼 제거)
     from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
@@ -306,7 +306,7 @@ async def upsert_user_summary_from_text(
     us.summary = summary_text.strip()
     us.last_message_created_at = msgs[-1].created_at if msgs else us.last_message_created_at
     from datetime import datetime
-    us.updated_at = datetime.utcnow()
+    us.updated_at = datetime.now()
     try:
         await session.commit()
     except Exception:

@@ -10,7 +10,7 @@ from loguru import logger
 logger.remove()  # 기본 핸들러 제거
 logger.add(sys.stdout, level="INFO", format="{time} | {level} | {message}")
 
-# 요청 시간 예산 (카카오 프록시 5초 대비 안전 마진) 및 전역 HTTPX 클라이언트 선언
+# 요청 시간 계산 (카카오 블록은 5초 제한, 이전 마진) 및 전역 HTTPX 클라이언트 선언
 BUDGET: float = 4.0
 ENABLE_CALLBACK: bool = True
 http_client: httpx.AsyncClient | None = None
@@ -31,7 +31,7 @@ async def on_startup():
         limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
     )
 
-    # DB는 실패해도 서버는 뜨게
+    # DB가 실패해도 서버는 뜨게
     try:
         await init_db()
         logger.info("DB initialized.")
@@ -45,15 +45,15 @@ async def on_startup():
                         session=session,
                         name="default",
                         system_prompt="""당신은 전문 AI 심리상담가입니다. 
-                        다음 원칙을 따라 응답해주세요:
+                        다음 규칙을 따라 답변해주세요:
 
-                        1. 친근하고 공감적인 톤으로 대화하세요
+                        1. 친근하고 공감적인 말로 대화하세요
                         2. 사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요
-                        3. 모르는 내용은 솔직히 모른다고 하고, 추가 도움을 제안하세요
+                        3. 모르는 내용은 솔직히 모른다고 하고, 추가 질문을 제안하세요
                         4. 답변은 간결하면서도 충분한 정보를 포함하세요
                         5. 한국어로 자연스럽게 대화하세요
-                        6. 지금까지의 대화 내용과(있다면) 이전 요약을 우선 참고하여 맥락에 맞게 대화를 이어가세요""",
-                        description="기본 상담봇 프롬프트",
+                        6. 지금까지의 대화 내용을 이전 요약을 먼저 참고하여 맥락에 맞게 대화를 이어가세요""",
+                        description="기본 상담사 프롬프트",
                         created_by="system"
                     )
                     logger.info("Default prompt template created")
@@ -67,7 +67,7 @@ async def on_startup():
     # AI 워커 시작 (DB와 무관)
     await ai_worker.start()
     logger.info("AI Worker started.")
-    # 세션 비활성 워처 시작
+    # 세션 비활성 와처 시작
     try:
         await ensure_watcher_started()
     except Exception as e:
@@ -93,7 +93,7 @@ async def on_shutdown():
         logger.error(f"Error during shutdown: {e}")
 
 
-# 라우터 import 및 등록 (이벤트 핸들러 정의 후에 등록해도 무방)
+# 라우터 import 및 등록 (이벤트 핸들러 선언 뒤에 등록해도 무방)
 from app.api.kakao_routes import router as kakao_router
 from app.api.admin_routes import router as admin_router
 from app.api.user_routes import router as user_router
@@ -116,5 +116,5 @@ async def root():
 
 @app.post("/")
 async def root_post():
-    """루트 경로 POST 요청 처리 (외부 봇/스캐너 대응)"""
+    """루트 경로 POST 요청 처리 (잘못 된 엔드포인트)"""
     return {"error": "Please use /skill endpoint for Kakao chatbot requests"}

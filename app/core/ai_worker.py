@@ -18,7 +18,7 @@ class AIWorker:
         self.polling_interval = 2  # 2초마다 새로운 작업 확인
         
     async def start(self):
-        """워커를 시작합니다."""
+        """워커를 시작합니다"""
         if self.is_running:
             logger.warning("AI Worker is already running")
             return
@@ -28,7 +28,7 @@ class AIWorker:
         logger.info("AI Worker started")
     
     async def stop(self):
-        """워커를 중지합니다."""
+        """워커를 중지합니다"""
         if not self.is_running:
             return
             
@@ -54,10 +54,10 @@ class AIWorker:
                 await asyncio.sleep(5)  # 에러 발생 시 5초 대기
     
     async def _process_pending_tasks(self):
-        """대기 중인 작업들을 처리합니다."""
+        """대기중인 작업들을 처리합니다"""
         session = AsyncSessionLocal()
         try:
-            # 큐 기능 비활성화됨 → 아무 것도 하지 않음
+            # 이 기능 비활성화로 아무 것도 하지 않음
             return
             
         except Exception as e:
@@ -66,7 +66,7 @@ class AIWorker:
             await session.close()
     
     async def _process_single_task(self, task_id: str):
-        """단일 AI 작업을 처리합니다."""
+        """단일 AI 작업을 처리합니다"""
         session = AsyncSessionLocal()
         try:
             success, result, tokens = await ai_processing_service.process_ai_task(
@@ -88,7 +88,7 @@ class AIWorker:
             await session.close()
     
     async def get_worker_status(self) -> dict:
-        """워커 상태를 반환합니다."""
+        """워커 상태를 반환합니다"""
         return {
             "is_running": self.is_running,
             "polling_interval": self.polling_interval
