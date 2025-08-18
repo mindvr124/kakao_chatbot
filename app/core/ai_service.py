@@ -111,10 +111,12 @@ class AIService:
     @traceable
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
         """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
-        prompt_template = await self.get_active_prompt(session, prompt_name)
-        system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
-
-        messages: List[dict] = [{"role": "system", "content": system_prompt}]
+        # conv_id가 UUID일때만 대화 히스토리 조회
+        conv_uuid: UUID | None = None
+        try:
+            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+        except Exception:
+            conv_uuid = None
 
         # target_user_id 초기화
         target_user_id: Optional[str] = user_id
@@ -131,7 +133,9 @@ class AIService:
                     conversation = None
             target_user_id = conversation.user_id if conversation else None
 
-        # 사용자 이름이 있으면 추가
+        messages: List[dict] = []
+
+        # 사용자 이름이 있으면 가장 먼저 추가
         if target_user_id:
             try:
                 from app.database.models import AppUser
@@ -144,18 +148,16 @@ class AIService:
             except Exception as e:
                 logger.warning(f"Failed to get user name: {e}")
 
+        # 기본 시스템 프롬프트 추가
+        prompt_template = await self.get_active_prompt(session, prompt_name)
+        system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
+        messages.append({"role": "system", "content": system_prompt})
+
         # 맥락 내용 지시를 명시적으로 추가
         messages.append({
             "role": "system",
             "content": "아래는 이전 요약(지난번 대화 기록)을 참고하여, 맥락에 맞는 답변을 제공하세요"
         })
-
-        # conv_id가 UUID일때만 대화 히스토리 조회
-        conv_uuid: UUID | None = None
-        try:
-            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
-        except Exception:
-            conv_uuid = None
 
         has_user_summary = False
         user_summary_text: Optional[str] = None

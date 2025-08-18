@@ -382,7 +382,8 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             # 이름이 추출되면 저장
             try:
                 # 사용자 생성/업데이트
-                await upsert_user(session, user_id, name)
+                user = await upsert_user(session, user_id, name)
+                logger.info(f"User name saved - user_id: {user_id}, name: {name}, saved_name: {user.user_name}")
                 response_text = f"반가워 {name}아(야)! 앞으로 {name}(이)라고 부를게🦉"
             except Exception as e:
                 logger.error(f"Failed to save user name: {e}")
