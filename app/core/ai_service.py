@@ -116,6 +116,21 @@ class AIService:
 
         messages: List[dict] = [{"role": "system", "content": system_prompt}]
 
+        # target_user_id 초기화
+        target_user_id: Optional[str] = user_id
+        conversation: Conversation | None = None
+        if not target_user_id and conv_uuid is not None:
+            try:
+                conversation = await session.get(Conversation, conv_uuid)
+            except Exception:
+                try:
+                    await session.rollback()
+                    conversation = await session.get(Conversation, conv_uuid)
+                except Exception as e:
+                    logger.warning(f"build_messages get(Conversation) failed after rollback: {e}")
+                    conversation = None
+            target_user_id = conversation.user_id if conversation else None
+
         # 사용자 이름이 있으면 추가
         if target_user_id:
             try:
@@ -135,28 +150,12 @@ class AIService:
             "content": "아래는 이전 요약(지난번 대화 기록)을 참고하여, 맥락에 맞는 답변을 제공하세요"
         })
 
-        # conv_id가 UUID일때만 대화 히스토리 조회 (요약용 user_id도 조회)
+        # conv_id가 UUID일때만 대화 히스토리 조회
         conv_uuid: UUID | None = None
         try:
             conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
         except Exception:
             conv_uuid = None
-
-        # 사용자 요약 조회 (있으면 사용, 없으면 폴백 없이 진행)
-        # 단, appuser의 user_id를 우선 사용 (conv_id는 보조)
-        target_user_id: Optional[str] = user_id
-        conversation: Conversation | None = None
-        if not target_user_id and conv_uuid is not None:
-            try:
-                conversation = await session.get(Conversation, conv_uuid)
-            except Exception:
-                try:
-                    await session.rollback()
-                    conversation = await session.get(Conversation, conv_uuid)
-                except Exception as e:
-                    logger.warning(f"build_messages get(Conversation) failed after rollback: {e}")
-                    conversation = None
-            target_user_id = conversation.user_id if conversation else None
 
         has_user_summary = False
         user_summary_text: Optional[str] = None
