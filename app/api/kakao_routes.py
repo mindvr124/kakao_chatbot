@@ -171,32 +171,45 @@ async def skill_endpoint(
         try:
             user = await session.get(AppUser, user_id)
             if user is None or user.user_name is None:
+                # 이름을 기다리는 중이었다면 이름 저장 시도
+                if PendingNameCache.is_waiting(user_id):
+                    text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
+                    text = _NAME_SUFFIX_PATTERN.sub('', text)
+                    text = text.strip()
+                    
+                    name = None
+                    if text:
+                        match = _KOREAN_NAME_PATTERN.search(text)
+                        if match:
+                            name = match.group()
+                    
+                    if name:
+                        cand = clean_name(name)
+                        if is_valid_name(cand):
+                            try:
+                                await save_user_name(session, user_id, cand)
+                                PendingNameCache.clear(user_id)
+                                try:
+                                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
+                                except Exception:
+                                    pass
+                                return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
+                            except Exception as e:
+                                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in first chat: {e}")
+                                PendingNameCache.clear(user_id)
+                        else:
+                            return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
+                    else:
+                        return kakao_text("불리고 싶은 이름을 알려줘! 그럼 나온이가 꼭 기억할게~")
+                
                 # 인삿말이 오면 웰컴 메시지로 응답
-                if any(greeting in user_text_stripped.lower() for greeting in _GREETINGS):
+                elif any(greeting in user_text_stripped.lower() for greeting in _GREETINGS):
                     PendingNameCache.set_waiting(user_id)
                     try:
                         await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
                     except Exception:
                         pass
                     return kakao_text(random.choice(_WELCOME_MESSAGES))
-                
-                # 이름을 기다리는 중이었다면 이름 저장 시도
-                if PendingNameCache.is_waiting(user_id):
-                    cand = clean_name(user_text_stripped)
-                    if is_valid_name(cand):
-                        try:
-                            await save_user_name(session, user_id, cand)
-                            PendingNameCache.clear(user_id)
-                            try:
-                                await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
-                            except Exception:
-                                pass
-                            return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
-                        except Exception as e:
-                            logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in first chat: {e}")
-                            PendingNameCache.clear(user_id)
-                    else:
-                        return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
                 else:
                     # 이름을 물어보는 메시지 전송
                     PendingNameCache.set_waiting(user_id)
