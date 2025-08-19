@@ -11,7 +11,7 @@ from app.utils.utils import extract_user_id, extract_callback_url, remove_markdo
 from app.core.ai_service import ai_service
 from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity, _send_callback_response
 from app.core.summary import maybe_rollup_user_summary
-from app.main import http_client, BUDGET, ENABLE_CALLBACK
+from app.main import BUDGET, ENABLE_CALLBACK
 import time
 import asyncio
 
@@ -303,27 +303,57 @@ async def skill_endpoint(
             except Exception:
                 pass
 
-            async def _send_callback_response(callback_url: str, final_text: str, tokens_used: int, request_id: str | None):
+            def _kakao_payload(text: str) -> dict:
                 try:
-                    async with http_client.post(
-                        callback_url,
-                        json={
-                            "version": "2.0",
-                            "template": {
-                                "outputs": [
-                                    {
-                                        "simpleText": {
-                                            "text": remove_markdown(final_text)
-                                        }
-                                    }
-                                ]
-                            }
-                        },
-                        timeout=3.0
-                    ) as resp:
+                    text = remove_markdown(text)
+                except Exception:
+                    pass
+                return {
+                    "version": "2.0",
+                    "template": {
+                        "outputs": [
+                            {"simpleText": {"text": text}}
+                        ]
+                    }
+                }
+
+            async def _send_callback_response(callback_url: str, text: str, tokens_used: int, request_id: str | None):
+                if not callback_url or not isinstance(callback_url, str) or not callback_url.startswith("http"):
+                    logger.bind(x_request_id=request_id).error(f"Invalid callback_url: {callback_url!r}")
+                    return
+
+                payload = _kakao_payload(text)
+                headers = {"Content-Type": "application/json; charset=utf-8"}
+
+                # 1) httpx 시도
+                try:
+                    import httpx  # <- 여기서만 import; 실패해도 except로 넘어감
+                    async with httpx.AsyncClient(timeout=5.0) as client:
+                        resp = await client.post(callback_url, json=payload, headers=headers)
                         resp.raise_for_status()
+                    logger.bind(x_request_id=request_id).info(f"Callback posted via httpx ({resp.status_code})")
+                    return
+                except ModuleNotFoundError:
+                    # httpx 미설치 → 2) 표준 라이브러리 fallback
+                    pass
                 except Exception as e:
-                    logger.bind(x_request_id=request_id).error(f"Callback request failed: {e}")
+                    logger.bind(x_request_id=request_id).exception(f"Callback post failed via httpx: {e}")
+                    # httpx가 있는데 실패했다면 여기서 끝내지 말고 urllib로도 한 번 더 시도해봄
+
+                # 2) urllib fallback (동기) — 서비스 블로킹 방지 위해 스레드에서 실행
+                import urllib.request
+                import json
+                def _post_blocking():
+                    data = json.dumps(payload).encode("utf-8")
+                    req = urllib.request.Request(callback_url, data=data, headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        return r.status
+
+                try:
+                    status = await asyncio.to_thread(_post_blocking)
+                    logger.bind(x_request_id=request_id).info(f"Callback posted via urllib ({status})")
+                except Exception as e:
+                    logger.bind(x_request_id=request_id).exception(f"Callback post failed via urllib: {e}")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
                 final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
