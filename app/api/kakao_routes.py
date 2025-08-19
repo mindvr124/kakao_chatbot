@@ -659,17 +659,25 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
         if not isinstance(user_text, str):
             user_text = str(user_text or "")
             
-        # 4) 이름 추출 시도
-        name = extract_korean_name(user_text)
+        # 4) 이름 추출 및 저장 시도 (skill과 동일한 로직)
+        user_text_stripped = user_text.strip()
+        name = extract_korean_name(user_text_stripped)
         if name:
-            # 이름이 추출되면 저장
-            try:
-                # 사용자 이름 저장
-                await save_user_name(session, user_id, name)
-                logger.info(f"User name saved in welcome - user_id: {user_id}, name: {name}")
-                response_text = f"반가워 {name}아(야)! 앞으로 {name}(이)라고 부를게🦉"
-            except Exception as e:
-                logger.error(f"Failed to save user name: {e}")
+            # 이름이 추출되면 형식 검사 후 저장
+            cand = clean_name(name)
+            if is_valid_name(cand):
+                try:
+                    await save_user_name(session, user_id, cand)
+                    try:
+                        await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "welcome"})
+                    except Exception:
+                        pass
+                    response_text = f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉"
+                except Exception as e:
+                    logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in welcome: {e}")
+                    response_text = random.choice(_WELCOME_MESSAGES)
+            else:
+                # 이름 형식이 맞지 않으면 웰컴 메시지
                 response_text = random.choice(_WELCOME_MESSAGES)
         else:
             # 이름이 없으면 웰컴 메시지
