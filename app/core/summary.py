@@ -59,7 +59,7 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
         else:
             # sync client (fallback)
             resp = llm_or_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=messages,
                 temperature=0.2,
                 max_tokens=300,
