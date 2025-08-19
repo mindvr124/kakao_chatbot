@@ -304,27 +304,115 @@ async def skill_endpoint(
             except Exception:
                 pass
 
-            MAX_SIMPLETEXT = 900          # 안전 마진
-            MAX_OUTPUTS = 5               # 한 번에 보내는 simpleText 개수 제한
+            import re
 
-            def _split_for_kakao(text: str, limit: int = MAX_SIMPLETEXT) -> list[str]:
-                # 마크다운 제거 후 단락/문장 단위로 안전 분할
+            MAX_SIMPLETEXT = 900   # 카카오 안전 마진
+            MAX_OUTPUTS    = 3     # 한 번에 보낼 simpleText 개수
+
+            _SENT_ENDERS = ("...", "…", ".", "!", "?", "。", "！", "？")
+
+            def _hard_wrap_sentence(s: str, limit: int) -> list[str]:
+                """한 문장이 limit보다 길면 최대한 공백/줄바꿈 기준으로 부드럽게 쪼갠다."""
+                out = []
+                u = s.strip()
+                while len(u) > limit:
+                    # 선호도: 줄바꿈 > 공백 > 하드컷
+                    cut = u.rfind("\n", 0, limit)
+                    if cut < int(limit * 0.6):
+                        cut = u.rfind(" ", 0, limit)
+                    if cut == -1:
+                        cut = limit
+                    out.append(u[:cut].rstrip())
+                    u = u[cut:].lstrip()
+                if u:
+                    out.append(u)
+                return out
+
+            def split_for_kakao_sentence_safe(text: str, limit: int = MAX_SIMPLETEXT) -> list[str]:
+                """
+                - 문장 끝(., !, ?, …, 全角句点 등) 또는 빈 줄/줄바꿈 경계를 우선으로 분할
+                - 문장이 limit보다 길면 그 문장만 부드럽게 하드랩
+                """
                 t = remove_markdown(text or "").replace("\r\n", "\n").strip()
-                chunks: list[str] = []
-                for para in t.split("\n\n"):
-                    s = para.strip()
-                    while len(s) > limit:
-                        # 줄바꿈 기준으로 자르기 → 없으면 공백 → 마지막엔 그냥 하드컷
-                        cut = s.rfind("\n", 0, limit)
-                        if cut < int(limit * 0.6):
-                            cut = s.rfind(" ", 0, limit)
-                        if cut == -1:
-                            cut = limit
-                        chunks.append(s[:cut].strip())
-                        s = s[cut:].lstrip()
-                    if s:
-                        chunks.append(s)
-                return chunks
+
+                chunks = []
+                i, n = 0, len(t)
+
+                while i < n:
+                    end = min(i + limit, n)
+                    window = t[i:end]
+
+                    if end < n:
+                        # 1) 문장부호 경계 찾기
+                        cand = -1
+                        for p in _SENT_ENDERS:
+                            pos = window.rfind(p)
+                            cand = max(cand, pos)
+
+                        # 2) 문장부호가 너무 앞이면(=너무 작게 잘릴 위험) 줄바꿈/공백 경계도 고려
+                        nl_pos    = window.rfind("\n")
+                        space_pos = window.rfind(" ")
+
+                        boundary = cand
+                        if boundary < int(limit * 0.4):
+                            boundary = max(boundary, nl_pos, space_pos)
+
+                        # 3) 경계가 없으면 하드컷
+                        if boundary == -1:
+                            boundary = len(window)
+                        else:
+                            boundary += 1  # 경계 문자 포함
+
+                    else:
+                        boundary = len(window)
+
+                    piece = window[:boundary].rstrip()
+
+                    # 만약 "한 문장" 자체가 limit보다 긴 경우엔 부드럽게 랩
+                    if len(piece) == boundary and (end < n) and boundary == len(window):
+                        # window 안에 경계가 전혀 없어서 통째로 잘린 케이스
+                        chunks.extend(_hard_wrap_sentence(piece, limit))
+                    else:
+                        if not piece:  # 빈 조각 방지
+                            piece = t[i:end].strip()
+                        if piece:
+                            chunks.append(piece)
+
+                    i += len(piece)
+                    # 경계 이후의 공백/개행 정리
+                    while i < n and t[i] in (" ", "\n"):
+                        i += 1
+
+                return [c for c in chunks if c]
+
+            def pack_into_max_outputs(parts: list[str], limit: int, max_outputs: int) -> list[str]:
+                """
+                이미 limit 이하로 분할된 parts를, 개수를 줄이기 위해 앞에서부터
+                가능한 만큼 합치되 각 조각이 limit를 넘지 않게 그리디로 포장.
+                """
+                if len(parts) <= max_outputs:
+                    return parts
+
+                packed = []
+                cur = ""
+                for p in parts:
+                    if not cur:
+                        cur = p
+                        continue
+                    if len(cur) + 1 + len(p) <= limit:
+                        cur = f"{cur}\n{p}"
+                    else:
+                        packed.append(cur)
+                        cur = p
+                if cur:
+                    packed.append(cur)
+
+                # 그래도 많으면 맨 뒤를 잘라내는 대신, 마지막 아이템에 안내 메시지 추가
+                if len(packed) > max_outputs:
+                    keep = packed[:max_outputs-1]
+                    keep.append("※ 내용이 길어 일부만 보냈어. '자세히'라고 보내면 이어서 보여줄게!")
+                    return keep
+                return packed
 
             async def _send_callback_response(callback_url: str, text: str, tokens_used: int, request_id: str | None):
                 if not callback_url or not isinstance(callback_url, str) or not callback_url.startswith("http"):
@@ -333,11 +421,10 @@ async def skill_endpoint(
 
                 import json, httpx, urllib.request
 
-                parts = _split_for_kakao(text, MAX_SIMPLETEXT)
-                outputs = [{"simpleText": {"text": p}} for p in parts[:MAX_OUTPUTS]]
-                if len(parts) > MAX_OUTPUTS:
-                    outputs.append({"simpleText": {"text": "※ 내용이 길어 일부만 보냈어. '자세히'라고 보내면 이어서 보여줄게!"}})
-
+                parts = split_for_kakao_sentence_safe(text, MAX_SIMPLETEXT)
+                parts = pack_into_max_outputs(parts, MAX_SIMPLETEXT, MAX_OUTPUTS)
+                outputs = [{"simpleText": {"text": p}} for p in parts]
+                
                 payload = {
                     "version": "2.0",
                     "template": {"outputs": outputs},
