@@ -94,13 +94,7 @@ class PendingNameCache:
 
 async def save_user_name(session: AsyncSession, user_id: str, name: str):
     """appuser.user_name 저장/갱신"""
-    await upsert_user(session, user_id)
-    user = await session.get(AppUser, user_id)
-    if user is None:
-        user = AppUser(user_id=user_id, user_name=name)
-        session.add(user)
-    else:
-        user.user_name = name
+    await upsert_user(session, user_id, name)  # user_name도 함께 전달
     await session.commit()
 
 def kakao_text(text: str) -> JSONResponse:
@@ -661,6 +655,7 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             
         # 4) 이름 추출 및 저장 시도 (skill과 동일한 로직)
         user_text_stripped = user_text.strip()
+        logger.info(f"Welcome - Processing text: {user_text_stripped}")
         
         # 이름 추출 시도 (skill과 동일한 패턴 매칭)
         name = None
@@ -669,19 +664,26 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
         text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
         text = _NAME_SUFFIX_PATTERN.sub('', text)
         text = text.strip()
+        logger.info(f"Welcome - After pattern removal: {text}")
         
         # 남은 텍스트에서 한글 이름 패턴 찾기
         if text:
             match = _KOREAN_NAME_PATTERN.search(text)
             if match:
                 name = match.group()
+                logger.info(f"Welcome - Extracted name: {name}")
         
         if name:
             # 이름이 추출되면 형식 검사 후 저장
             cand = clean_name(name)
+            logger.info(f"Welcome - Cleaned name: {cand}")
             if is_valid_name(cand):
+                logger.info(f"Welcome - Name is valid: {cand}")
                 try:
                     await save_user_name(session, user_id, cand)
+                    # DB에서 실제로 저장됐는지 확인
+                    user = await session.get(AppUser, user_id)
+                    logger.info(f"Welcome - Saved name check - user: {user.user_id}, name: {user.user_name}")
                     try:
                         await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "welcome"})
                     except Exception:
@@ -691,9 +693,11 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
                     logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in welcome: {e}")
                     response_text = random.choice(_WELCOME_MESSAGES)
             else:
+                logger.info(f"Welcome - Name is invalid: {cand}")
                 # 이름 형식이 맞지 않으면 웰컴 메시지
                 response_text = random.choice(_WELCOME_MESSAGES)
         else:
+            logger.info("Welcome - No name extracted")
             # 이름이 없으면 웰컴 메시지
             response_text = random.choice(_WELCOME_MESSAGES)
             
