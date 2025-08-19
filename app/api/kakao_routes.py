@@ -296,7 +296,8 @@ async def skill_endpoint(
             # 시간 내 미완료시 즉시 콜백 대기 응답 반환
             immediate = {
                 "version": "2.0",
-                "template": {"outputs":[{"simpleText":{"text":"답변을 생성 중입니다..."}}]}
+                "template": {"outputs":[{"simpleText":{"text":"답변을 생성 중입니다..."}}]},
+                "useCallback": True
             }
             try:
                 await save_event_log(session, "callback_waiting_sent", user_id, None, x_request_id, None)
@@ -339,7 +340,8 @@ async def skill_endpoint(
 
                 payload = {
                     "version": "2.0",
-                    "template": {"outputs": outputs}
+                    "template": {"outputs": outputs},
+                    "useCallback": True
                 }
                 headers = {"Content-Type": "application/json; charset=utf-8"}
 
