@@ -303,59 +303,72 @@ async def skill_endpoint(
             except Exception:
                 pass
 
-            def _kakao_payload(text: str) -> dict:
-                try:
-                    text = remove_markdown(text)
-                except Exception:
-                    pass
-                return {
-                    "data": {
-                        "version": "2.0",
-                        "template": {
-                            "outputs": [
-                                {"simpleText": {"text": text}}
-                            ]
-                        }
-                    }
-                }
+            MAX_SIMPLETEXT = 900          # 안전 마진
+            MAX_OUTPUTS = 5               # 한 번에 보내는 simpleText 개수 제한
+
+            def _split_for_kakao(text: str, limit: int = MAX_SIMPLETEXT) -> list[str]:
+                # 마크다운 제거 후 단락/문장 단위로 안전 분할
+                t = remove_markdown(text or "").replace("\r\n", "\n").strip()
+                chunks: list[str] = []
+                for para in t.split("\n\n"):
+                    s = para.strip()
+                    while len(s) > limit:
+                        # 줄바꿈 기준으로 자르기 → 없으면 공백 → 마지막엔 그냥 하드컷
+                        cut = s.rfind("\n", 0, limit)
+                        if cut < int(limit * 0.6):
+                            cut = s.rfind(" ", 0, limit)
+                        if cut == -1:
+                            cut = limit
+                        chunks.append(s[:cut].strip())
+                        s = s[cut:].lstrip()
+                    if s:
+                        chunks.append(s)
+                return chunks
 
             async def _send_callback_response(callback_url: str, text: str, tokens_used: int, request_id: str | None):
                 if not callback_url or not isinstance(callback_url, str) or not callback_url.startswith("http"):
                     logger.bind(x_request_id=request_id).error(f"Invalid callback_url: {callback_url!r}")
                     return
 
-                payload = _kakao_payload(text)
+                import json, httpx, urllib.request
+
+                parts = _split_for_kakao(text, MAX_SIMPLETEXT)
+                outputs = [{"simpleText": {"text": p}} for p in parts[:MAX_OUTPUTS]]
+                if len(parts) > MAX_OUTPUTS:
+                    outputs.append({"simpleText": {"text": "※ 내용이 길어 일부만 보냈어. '자세히'라고 보내면 이어서 보여줄게!"}})
+
+                payload = {
+                    "version": "2.0",
+                    "template": {"outputs": outputs}
+                }
                 headers = {"Content-Type": "application/json; charset=utf-8"}
 
-                # 1) httpx 시도
+                # 1) httpx 우선 시도 (에러시 본문도 로깅)
                 try:
-                    import httpx  # <- 여기서만 import; 실패해도 except로 넘어감
                     async with httpx.AsyncClient(timeout=5.0) as client:
                         resp = await client.post(callback_url, json=payload, headers=headers)
+                        if resp.status_code >= 400:
+                            logger.error(f"Callback post failed via httpx: {resp.status_code} {resp.reason_phrase} | body={resp.text}")
                         resp.raise_for_status()
-                    logger.bind(x_request_id=request_id).info(f"Callback posted via httpx ({resp.status_code})")
-                    return
-                except ModuleNotFoundError:
-                    # httpx 미설치 → 2) 표준 라이브러리 fallback
-                    pass
+                        return
                 except Exception as e:
-                    logger.bind(x_request_id=request_id).exception(f"Callback post failed via httpx: {e}")
-                    # httpx가 있는데 실패했다면 여기서 끝내지 말고 urllib로도 한 번 더 시도해봄
+                    logger.exception(f"Callback post failed via httpx: {e}")
 
-                # 2) urllib fallback (동기) — 서비스 블로킹 방지 위해 스레드에서 실행
-                import urllib.request
-                import json
-                def _post_blocking():
+                # 2) urllib 백업 시도 (동일 payload)
+                try:
                     data = json.dumps(payload).encode("utf-8")
                     req = urllib.request.Request(callback_url, data=data, headers=headers, method="POST")
-                    with urllib.request.urlopen(req, timeout=5) as r:
-                        return r.status
-
-                try:
+                    # 블로킹이라 스레드로
+                    def _post_blocking():
+                        with urllib.request.urlopen(req, timeout=3) as r:
+                            status = r.status
+                            if status >= 400:
+                                raise RuntimeError(f"urllib callback HTTP {status}")
+                            return status
                     status = await asyncio.to_thread(_post_blocking)
-                    logger.bind(x_request_id=request_id).info(f"Callback posted via urllib ({status})")
+                    logger.info(f"Callback posted via urllib, status={status}")
                 except Exception as e:
-                    logger.bind(x_request_id=request_id).exception(f"Callback post failed via urllib: {e}")
+                    logger.exception(f"Callback post failed via urllib: {e}")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
                 final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
