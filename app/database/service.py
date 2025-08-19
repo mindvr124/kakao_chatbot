@@ -5,6 +5,19 @@ from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
 
+async def get_user_name(session: AsyncSession, user_id: str) -> str | None:
+    """사용자 이름을 조회합니다. 없으면 None을 반환합니다."""
+    try:
+        user = await session.get(AppUser, user_id)
+        return user.user_name if user else None
+    except Exception:
+        try:
+            await session.rollback()
+            user = await session.get(AppUser, user_id)
+            return user.user_name if user else None
+        except Exception:
+            return None
+
 async def upsert_user(session: AsyncSession, user_id: str, user_name: str | None = None) -> AppUser:
     try:
         user = await session.get(AppUser, user_id)

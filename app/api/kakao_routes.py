@@ -158,6 +158,41 @@ async def skill_endpoint(
             user_text = "안녕하세요"
         user_text_stripped = user_text.strip()
 
+        # ====== [첫 대화 사용자 이름 처리] ==================================
+        # UserSummary가 없는 경우 = 첫 대화
+        stmt = select(UserSummary).where(UserSummary.user_id == user_id)
+        try:
+            result = await session.execute(stmt)
+            user_summary = result.scalar_one_or_none()
+            
+            if user_summary is None:
+                # 첫 대화인 경우 이름 추출 시도
+                text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
+                text = _NAME_SUFFIX_PATTERN.sub('', text)
+                text = text.strip()
+                
+                name = None
+                if text:
+                    match = _KOREAN_NAME_PATTERN.search(text)
+                    if match:
+                        name = match.group()
+                
+                if name:
+                    cand = clean_name(name)
+                    if is_valid_name(cand):
+                        try:
+                            await save_user_name(session, user_id, cand)
+                            try:
+                                await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
+                            except Exception:
+                                pass
+                            # 이름 저장 성공 메시지를 보내고 대화 종료
+                            return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
+                        except Exception as e:
+                            logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in first chat: {e}")
+        except Exception as e:
+            logger.bind(x_request_id=x_request_id).exception(f"Failed to check UserSummary: {e}")
+
         # ====== [이름 플로우: 최우선 인터셉트] ==================================
         # 2-1) '/이름' 명령만 온 경우 → 다음 발화를 이름으로 받기
         if user_text_stripped == "/이름":
@@ -623,9 +658,11 @@ async def skill_endpoint(
         }, media_type="application/json; charset=utf-8")
 
 
+
+
 @router.post("/welcome")
 async def welcome_skill(request: Request, session: AsyncSession = Depends(get_session)):
-    """웰컴 스킬: 사용자 이름을 받아서 저장합니다."""
+    """웰컴 스킬: 처음 대화를 시작할 때 웰컴 메시지를 보냅니다."""
     try:
         # 1) 요청 처리
         x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
@@ -640,67 +677,14 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             body = {}
             
         # 2) 사용자 ID 추출
-        logger.info(f"Welcome skill request body: {body}")  # 전체 요청 바디 로깅
         user_id = extract_user_id(body)
-        logger.info(f"Extracted user_id from welcome skill: {user_id}")  # 추출된 user_id 로깅
         if not user_id:
             anon_suffix = x_request_id or "unknown"
             user_id = f"anonymous:{anon_suffix}"
             logger.warning(f"No user_id in welcome skill, using fallback: {user_id}")
             
-        # 3) 사용자 발화 추출
-        user_text = (body.get("userRequest") or {}).get("utterance", "")
-        if not isinstance(user_text, str):
-            user_text = str(user_text or "")
-            
-        # 4) 이름 추출 및 저장 시도 (skill과 동일한 로직)
-        user_text_stripped = user_text.strip()
-        logger.info(f"Welcome - Processing text: {user_text_stripped}")
-        
-        # 이름 추출 시도 (skill과 동일한 패턴 매칭)
-        name = None
-        
-        # 앞뒤 패턴 제거
-        text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
-        text = _NAME_SUFFIX_PATTERN.sub('', text)
-        text = text.strip()
-        logger.info(f"Welcome - After pattern removal: {text}")
-        
-        # 남은 텍스트에서 한글 이름 패턴 찾기
-        if text:
-            match = _KOREAN_NAME_PATTERN.search(text)
-            if match:
-                name = match.group()
-                logger.info(f"Welcome - Extracted name: {name}")
-        
-        if name:
-            # 이름이 추출되면 형식 검사 후 저장
-            cand = clean_name(name)
-            logger.info(f"Welcome - Cleaned name: {cand}")
-            if is_valid_name(cand):
-                logger.info(f"Welcome - Name is valid: {cand}")
-                try:
-                    await save_user_name(session, user_id, cand)
-                    # DB에서 실제로 저장됐는지 확인
-                    user = await session.get(AppUser, user_id)
-                    logger.info(f"Welcome - Saved name check - user: {user.user_id}, name: {user.user_name}")
-                    try:
-                        await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "welcome"})
-                    except Exception:
-                        pass
-                    response_text = f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉"
-                except Exception as e:
-                    logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in welcome: {e}")
-                    response_text = random.choice(_WELCOME_MESSAGES)
-            else:
-                logger.info(f"Welcome - Name is invalid: {cand}")
-                # 이름 형식이 맞지 않으면 웰컴 메시지
-                response_text = random.choice(_WELCOME_MESSAGES)
-        else:
-            logger.info("Welcome - No name extracted")
-            # 이름이 없으면 웰컴 메시지
-            response_text = random.choice(_WELCOME_MESSAGES)
-            
+        # 3) 웰컴 메시지 전송
+        response_text = random.choice(_WELCOME_MESSAGES)
         return JSONResponse(content={
             "version": "2.0",
             "template": {"outputs": [{"simpleText": {"text": response_text}}]}
@@ -712,6 +696,7 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             "version": "2.0",
             "template": {"outputs": [{"simpleText": {"text": random.choice(_WELCOME_MESSAGES)}}]}
         }, media_type="application/json; charset=utf-8")
+
 
 @router.post("/test-skill")
 async def test_skill_endpoint(request: Request):
