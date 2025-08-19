@@ -158,15 +158,12 @@ async def skill_endpoint(
             user_text = "안녕하세요"
         user_text_stripped = user_text.strip()
 
-        # ====== [첫 대화 사용자 이름 처리] ==================================
-        # UserSummary가 없는 경우 = 첫 대화
-        stmt = select(UserSummary).where(UserSummary.user_id == user_id)
+        # ====== [이름 없는 사용자 처리] ==================================
+        # AppUser 테이블에서 사용자 이름 확인
         try:
-            result = await session.execute(stmt)
-            user_summary = result.scalar_one_or_none()
-            
-            if user_summary is None:
-                # 첫 대화인 경우 이름 추출 시도
+            user = await session.get(AppUser, user_id)
+            if user is None or user.user_name is None:
+                # 이름이 없는 경우 이름 추출 시도
                 text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
                 text = _NAME_SUFFIX_PATTERN.sub('', text)
                 text = text.strip()
@@ -190,8 +187,11 @@ async def skill_endpoint(
                             return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
                         except Exception as e:
                             logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in first chat: {e}")
+                else:
+                    # 이름을 추출할 수 없으면 웰컴 메시지 출력
+                    return kakao_text(random.choice(_WELCOME_MESSAGES))
         except Exception as e:
-            logger.bind(x_request_id=x_request_id).exception(f"Failed to check UserSummary: {e}")
+            logger.bind(x_request_id=x_request_id).exception(f"Failed to check AppUser: {e}")
 
         # ====== [이름 플로우: 최우선 인터셉트] ==================================
         # 2-1) '/이름' 명령만 온 경우 → 다음 발화를 이름으로 받기
