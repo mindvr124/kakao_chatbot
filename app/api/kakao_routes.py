@@ -304,10 +304,26 @@ async def skill_endpoint(
                 pass
 
             async def _send_callback_response(callback_url: str, final_text: str, tokens_used: int, request_id: str | None):
-                # 너의 기존 콜백 전송 구현을 호출하도록 연결하세요.
-                # 예) await kakao_callback_post(callback_url, final_text)
-                from app.kakao.callback import post_callback  # 예시
-                await post_callback(callback_url, final_text)
+                try:
+                    async with http_client.post(
+                        callback_url,
+                        json={
+                            "version": "2.0",
+                            "template": {
+                                "outputs": [
+                                    {
+                                        "simpleText": {
+                                            "text": remove_markdown(final_text)
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        timeout=3.0
+                    ) as resp:
+                        resp.raise_for_status()
+                except Exception as e:
+                    logger.bind(x_request_id=request_id).error(f"Callback request failed: {e}")
 
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
                 final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
