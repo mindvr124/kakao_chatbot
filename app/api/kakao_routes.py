@@ -661,7 +661,21 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             
         # 4) 이름 추출 및 저장 시도 (skill과 동일한 로직)
         user_text_stripped = user_text.strip()
-        name = extract_korean_name(user_text_stripped)
+        
+        # 이름 추출 시도 (skill과 동일한 패턴 매칭)
+        name = None
+        
+        # 앞뒤 패턴 제거
+        text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
+        text = _NAME_SUFFIX_PATTERN.sub('', text)
+        text = text.strip()
+        
+        # 남은 텍스트에서 한글 이름 패턴 찾기
+        if text:
+            match = _KOREAN_NAME_PATTERN.search(text)
+            if match:
+                name = match.group()
+        
         if name:
             # 이름이 추출되면 형식 검사 후 저장
             cand = clean_name(name)
