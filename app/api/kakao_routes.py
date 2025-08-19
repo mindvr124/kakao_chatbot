@@ -309,11 +309,13 @@ async def skill_endpoint(
                 except Exception:
                     pass
                 return {
-                    "version": "2.0",
-                    "template": {
-                        "outputs": [
-                            {"simpleText": {"text": text}}
-                        ]
+                    "data": {
+                        "version": "2.0",
+                        "template": {
+                            "outputs": [
+                                {"simpleText": {"text": text}}
+                            ]
+                        }
                     }
                 }
 
