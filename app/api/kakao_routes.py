@@ -51,6 +51,69 @@ def extract_korean_name(text: str) -> str | None:
     
 router = APIRouter()
 
+
+# ====== [이름 저장 보조 유틸] =================================================
+
+# 허용 문자(한글/영문/숫자/중점/하이픈/언더스코어), 길이 1~20
+NAME_ALLOWED = re.compile(r"^[가-힣a-zA-Z0-9·\-\_]{1,20}$")
+
+def clean_name(s: str) -> str:
+    s = s.strip()
+    # 양쪽 따옴표/괄호/장식 제거
+    s = re.sub(r'[\"\'“”‘’()\[\]{}<>…~]+', "", s)
+    return s.strip()
+
+def is_valid_name(s: str) -> bool:
+    return bool(NAME_ALLOWED.fullmatch(s))
+
+class PendingNameCache:
+    """간단한 in-memory 캐시 (운영에선 Redis/DB 권장)"""
+    _store: dict[str, float] = {}
+    TTL_SECONDS = 300  # 5분
+
+    @classmethod
+    def set_waiting(cls, user_id: str):
+        cls._store[user_id] = time.time() + cls.TTL_SECONDS
+
+    @classmethod
+    def is_waiting(cls, user_id: str) -> bool:
+        exp = cls._store.get(user_id)
+        if not exp:
+            return False
+        if time.time() > exp:
+            try:
+                del cls._store[user_id]
+            except Exception:
+                pass
+            return False
+        return True
+
+    @classmethod
+    def clear(cls, user_id: str):
+        cls._store.pop(user_id, None)
+
+async def save_user_name(session: AsyncSession, user_id: str, name: str):
+    """appuser.user_name 저장/갱신"""
+    await upsert_user(session, user_id)
+    user = await session.get(AppUser, user_id)
+    if user is None:
+        user = AppUser(user_id=user_id, user_name=name)
+        session.add(user)
+    else:
+        user.user_name = name
+    await session.commit()
+
+def kakao_text(text: str) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "version": "2.0",
+            "template": {"outputs": [{"simpleText": {"text": text}}]}
+        },
+        media_type="application/json; charset=utf-8"
+    )
+
+# ====== [스킬 엔드포인트] =====================================================
+
 @router.post("/skill")
 @router.post("/skill/")
 async def skill_endpoint(
@@ -74,7 +137,6 @@ async def skill_endpoint(
             if not isinstance(body_dict, dict):
                 body_dict = {}
         except Exception as parse_err:
-            # JSON 파싱 실패 시에도 빈 바디로 진행해 400 방지 + 로깅 강화
             logger.warning(f"JSON parse failed: {parse_err}")
             body_dict = {}
         
@@ -93,19 +155,75 @@ async def skill_endpoint(
         callback_url = extract_callback_url(body_dict)
         logger.bind(x_request_id=x_request_id).info(f"Extracted callback_url: {callback_url}")
 
-        # 2) 콜백 요청이면 즉시 응답 후 비동기 콜백 (DB 이전)
-        # 3) 사용자 발화 추출 (Optional userRequest 방어)
+        # 2) 사용자 발화 추출
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
-        # trace_id는 X-Request-ID를 사용 (메모리 기반 히스토리 기능 롤백)
         trace_id = x_request_id
         if not isinstance(user_text, str):
             user_text = str(user_text or "")
         if not user_text:
-            # 카카오 스펙 검증용 빈 발화가 들어올 수 있어 기본값 제공
             user_text = "안녕하세요"
+        user_text_stripped = user_text.strip()
+
+        # ====== [이름 플로우: 최우선 인터셉트] ==================================
+        # 2-1) '/이름' 명령만 온 경우 → 다음 발화를 이름으로 받기
+        if user_text_stripped == "/이름":
+            PendingNameCache.set_waiting(user_id)
+            try:
+                await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
+            except Exception:
+                pass
+            return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
+
+        # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
+        if user_text_stripped.startswith("/이름 "):
+            raw = user_text_stripped[len("/이름 "):]
+            cand = clean_name(raw)
+            if not is_valid_name(cand):
+                return kakao_text("이름 형식은은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
+            try:
+                await save_user_name(session, user_id, cand)
+                try:
+                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "slash_inline"})
+                except Exception:
+                    pass
+                return kakao_text(f"예쁜 이름이다! 앞으로는 {cand}(이)라고 불러줄게~")
+            except Exception as name_err:
+                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
+                return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
+
+        # 2-3) 이전에 '/이름'을 받은 뒤 다음 발화가 온 경우 → 해당 발화를 이름으로 간주
+        if PendingNameCache.is_waiting(user_id):
+            # 취소 지원
+            if user_text_stripped in ("취소", "그만", "cancel", "Cancel"):
+                PendingNameCache.clear(user_id)
+                try:
+                    await save_event_log(session, "name_wait_cancel", user_id, None, x_request_id, None)
+                except Exception:
+                    pass
+                return kakao_text("좋아, 다음에 다시 알려줘!")
+
+            cand = clean_name(user_text_stripped)
+            if not is_valid_name(cand):
+                return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
+
+            try:
+                await save_user_name(session, user_id, cand)
+                PendingNameCache.clear(user_id)
+                try:
+                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "followup"})
+                except Exception:
+                    pass
+                return kakao_text(f"이름 예쁘다! 앞으로는 {cand}(이)라고 불러줄게~")
+            except Exception as name_err:
+                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
+                return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
+
+        # ====== [이름 플로우 끝: 이하 기존 로직 유지] ===========================
+
+        ENABLE_CALLBACK = True   # 기존 설정 사용하던 값에 맞춰주세요
+        BUDGET = 4.5             # 기존 타임아웃에 맞춰 조정
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
-            # 하이브리드: 4.5초내 완료 시 즉시 최종 응답, 아니면 콜백 대기 응답 후 콜백 2회(대기+최종)
             elapsed = time.perf_counter() - t0
             time_left = max(0.2, 4.5 - elapsed)
             try:
@@ -113,10 +231,12 @@ async def skill_endpoint(
                     await save_event_log(session, "request_received", user_id, None, x_request_id, {"callback": True})
                 except Exception:
                     pass
+
                 async def _ensure_quick_conv():
                     await upsert_user(session, user_id)
                     conv = await get_or_create_conversation(session, user_id)
                     return conv.conv_id
+
                 try:
                     quick_conv_id = await asyncio.wait_for(_ensure_quick_conv(), timeout=min(1.0, time_left - 0.1))
                 except Exception:
@@ -173,33 +293,39 @@ async def skill_endpoint(
             except Exception:
                 pass
 
-            # 시간 내 미완료시 즉시 콜백 대기 응답 반환, 백그라운드에서 '대기 콜백' 후 '최종 콜백' 순으로 전송
-            immediate = callback_waiting_response("답변을 생성 중입니다...")
+            # 시간 내 미완료시 즉시 콜백 대기 응답 반환
+            immediate = {
+                "version": "2.0",
+                "template": {"outputs":[{"simpleText":{"text":"답변을 생성 중입니다..."}}]}
+            }
             try:
                 await save_event_log(session, "callback_waiting_sent", user_id, None, x_request_id, None)
             except Exception:
                 pass
 
+            async def _send_callback_response(callback_url: str, final_text: str, tokens_used: int, request_id: str | None):
+                # 너의 기존 콜백 전송 구현을 호출하도록 연결하세요.
+                # 예) await kakao_callback_post(callback_url, final_text)
+                from app.kakao.callback import post_callback  # 예시
+                await post_callback(callback_url, final_text)
+
             async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
                 final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
                 tokens_used: int = 0
                 try:
-                    # 여기서 독립 세션으로 모든 무거운 작업 처리
                     async for s in get_session():
                         try:
-                            # DB 작업은 타임아웃 가드로 감쌉니다 (카카오 5초 제한 보호)
                             async def _ensure_conv():
                                 await upsert_user(s, user_id)
                                 return await get_or_create_conversation(s, user_id)
                             conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
                             conv_id_value = str(conv.conv_id)
-                            # 사용자 메시지 먼저 저장
                             try:
                                 if user_text:
                                     await save_message(s, conv_id_value, "user", user_text, trace_id, None, user_id)
                             except Exception as save_user_err:
                                 logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
-                            # AI 생성: 콜백 경로에서는 충분한 시간으로 생성 (타임아웃 미사용)
+
                             final_text, tokens_used = await ai_service.generate_response(
                                 session=s,
                                 conv_id=conv_id_value,
@@ -221,13 +347,10 @@ async def skill_endpoint(
                             logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
                             break
 
-                    # 최종 콜백 전송 (한 번만)
                     try:
                         await _send_callback_response(callback_url, final_text, tokens_used, request_id)
                     except Exception as post_err:
                         logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
-
-                    # 추가 콜백 전송 없음 (한 번만 전송)
                 except Exception as e:
                     logger.bind(x_request_id=request_id).exception(f"Callback flow failed: {e}")
 
@@ -239,7 +362,7 @@ async def skill_endpoint(
                 pass
             return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
 
-        # 4) 즉시응답 경로로 DB 작업 수행 (콜백 비활성화거나 콜백 URL 없음)
+        # 4) 콜백이 아닌 경우: 기존 즉시 응답 흐름
         try:
             async def _ensure_conv_main():
                 try:
@@ -266,7 +389,7 @@ async def skill_endpoint(
             logger.warning(f"DB ops failed in immediate path: {db_err}")
             conv_id = f"temp_{user_id}"
 
-        # 5) 콜백이 아닌 경우: AI 답변 생성 (BUDGET 적용)
+        # 5) AI 답변
         try:
             logger.info(f"Generating AI response for: {user_text}")
             try:
@@ -282,25 +405,34 @@ async def skill_endpoint(
                 )
             except asyncio.TimeoutError:
                 logger.warning("AI generation timeout. Falling back to canned message.")
-                final_text, tokens_used = ("잠시만요! 답변 생성이 길어져서 간단히 안내드려요", 0)
+                final_text, tokens_used = ("답변 생성이 길어졌어요. 잠시만 기다려주세요.", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
             try:
                 await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
                 pass
             
-            # 메시지 저장 시도 (DB 장애 없으면 temp는 없음)
             try:
                 if not str(conv_id).startswith("temp_"):
-                    # 기존 방식: conv_id가 유효하면 바로 저장
-                    asyncio.create_task(_save_user_message_background(
-                        conv_id, user_text, x_request_id, user_id
-                    ))
-                    asyncio.create_task(_save_ai_response_background(
-                        conv_id, final_text, 0, x_request_id, user_id
-                    ))
+                    async def _save_user_message_background(conv_id, user_text, x_request_id, user_id):
+                        async for s in get_session():
+                            try:
+                                await save_message(s, conv_id, "user", user_text, x_request_id, None, user_id)
+                                break
+                            except Exception:
+                                break
+
+                    async def _save_ai_response_background(conv_id, final_text, tokens_used, x_request_id, user_id):
+                        async for s in get_session():
+                            try:
+                                await save_message(s, conv_id, "assistant", final_text, x_request_id, tokens_used, user_id)
+                                break
+                            except Exception:
+                                break
+
+                    asyncio.create_task(_save_user_message_background(conv_id, user_text, x_request_id, user_id))
+                    asyncio.create_task(_save_ai_response_background(conv_id, final_text, 0, x_request_id, user_id))
                 else:
-                    # temp_* 인 경우에도 백그라운드에서 정식 conv 생성 후 저장 시도
                     async def _persist_when_db_ready(user_id: str, user_text: str, reply_text: str, request_id: str | None):
                         async for s in get_session():
                             try:
@@ -317,12 +449,11 @@ async def skill_endpoint(
             except Exception as save_error:
                 logger.warning(f"Failed to schedule message persistence: {save_error}")
             
-            # 액티비티 업데이트
             try:
                 update_last_activity(conv_id)
             except Exception:
                 pass
-            # 카카오로 응답 전송
+
             return JSONResponse(content={
                 "version": "2.0",
                 "template": {"outputs":[{"simpleText":{"text": remove_markdown(final_text)}}]}
@@ -341,7 +472,6 @@ async def skill_endpoint(
         
     except Exception as e:
         logger.exception(f"Error in skill endpoint: {e}")
-        # 카카오 스펙 준수: 기본 본문과 함께 200 OK를 내려 400 회피
         safe_text = "일시적인 오류가 발생했어요. 다시 한 번 시도해 주세요"
         return JSONResponse(content={
             "version": "2.0",
@@ -366,10 +496,13 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
             body = {}
             
         # 2) 사용자 ID 추출
+        logger.info(f"Welcome skill request body: {body}")  # 전체 요청 바디 로깅
         user_id = extract_user_id(body)
+        logger.info(f"Extracted user_id from welcome skill: {user_id}")  # 추출된 user_id 로깅
         if not user_id:
             anon_suffix = x_request_id or "unknown"
             user_id = f"anonymous:{anon_suffix}"
+            logger.warning(f"No user_id in welcome skill, using fallback: {user_id}")
             
         # 3) 사용자 발화 추출
         user_text = (body.get("userRequest") or {}).get("utterance", "")

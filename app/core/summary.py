@@ -39,7 +39,7 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
             if responses_create is None:
                 raise RuntimeError("지원되지 않는 LLM 클라이언트 타입입니다.")
             resp = await llm_or_client.responses.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 input=messages,
             )
             content = getattr(resp, "output_text", "") or "요약을 생성하지 못했습니다"
