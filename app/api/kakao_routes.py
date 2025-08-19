@@ -217,7 +217,7 @@ async def skill_endpoint(
                         await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
                     except Exception:
                         pass
-                    return kakao_text("안녕하세요! 처음 뵙네요🦉\n불리고 싶은 이름을 알려주시면, 앞으로 그렇게 불러드릴게요!")
+                    return kakao_text("안녕! 처음 보네~ 나는 나온이야 🦉\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줄게!")
         except Exception as e:
             logger.bind(x_request_id=x_request_id).exception(f"Failed to check AppUser: {e}")
 
