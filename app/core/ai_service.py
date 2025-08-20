@@ -147,9 +147,11 @@ class AIService:
                 from app.database.models import AppUser
                 user = await session.get(AppUser, target_user_id)
                 if user and user.user_name:
+                    # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
+                    user_name = user.user_name
                     messages.append({
                         "role": "system",
-                        "content": f"내담자의 이름은 {user.user_name}입니다. 무조건 기억 하고 대화 중 이름을 되묻지 마세요."
+                        "content": f"내담자의 이름은 {user_name}입니다. 무조건 기억 하고 대화 중 이름을 되묻지 마세요."
                     })
             except Exception as e:
                 logger.warning(f"Failed to get user name: {e}")

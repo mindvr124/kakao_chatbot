@@ -304,12 +304,14 @@ async def skill_endpoint(
         
         # 2-1.5) 기존 사용자가 이름 변경을 원할 때 → 이름 대기 상태 설정
         if user and user.user_name and user_text_stripped in ["이름 바꿔", "이름 변경", "다른 이름", "이름 바꾸고 싶어", "내 이름 그거 아"]:
+            # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
+            current_name = user.user_name
             PendingNameCache.set_waiting(user_id)
             try:
-                await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": user.user_name})
+                await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name})
             except Exception:
                 pass
-            return kakao_text(f"현재 '{user.user_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
+            return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
 
         # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
         if user_text_stripped.startswith("/이름 "):
