@@ -385,7 +385,12 @@ async def skill_endpoint(
                 logger.warning(f"\n[경고] AI 응답 확인 중 오류: {e}")
                 
             # AI 응답 확인 실패 또는 패턴 불일치 시 기존 로직으로 fallback
-            if user_text_stripped in ["이름 바꿔", "이름 변경", "다른 이름", "이름 바꾸고 싶어", "내 이름 그거 아", "이름 바꿀", "다르게 불러줘줘"]:
+            # 더 유연한 패턴 매칭: "다른 이름"이 포함된 모든 표현
+            if ("이름" in user_text_stripped and "다른" in user_text_stripped) or \
+               ("이름" in user_text_stripped and "바꿔" in user_text_stripped) or \
+               ("이름" in user_text_stripped and "바꿀" in user_text_stripped) or \
+               ("이름" in user_text_stripped and "변경" in user_text_stripped) or \
+               user_text_stripped in ["다른이름", "다른 이름", "이름 바꿔", "이름 바꿀래", "이름 바꾸고 싶어"]:
                 logger.info(f"\n[fallback] 명시적 이름 변경 요청 감지")
                 current_name = user.user_name
                 PendingNameCache.set_waiting(user_id)
@@ -759,7 +764,7 @@ async def skill_endpoint(
                 pass
             
             try:
-                if not str(conv_id).startswith("temp_"):
+                if not str(conv_id).startswith("temp_") and conv_id:
                     async def _save_user_message_background(conv_id, user_text, x_request_id, user_id):
                         async for s in get_session():
                             try:
