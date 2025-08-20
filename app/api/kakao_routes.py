@@ -23,6 +23,7 @@ import re
 # 이름 추출을 위한 정규식 패턴들
 _NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|나를를)\s*', re.IGNORECASE)
 _NAME_SUFFIX_PATTERN = re.compile(r'\s*(입니다|이에요|예요|에요|야|이야|라고\s*해|라고\s*해요|이라고\s*해|이라고\s*해요|합니다|불러|불러줘|라고\s*불러|라고\s*불러줘|이라고\s*불러|이라고\s*불러줘)\.?$', re.IGNORECASE)
+_NAME_REQUEST_PATTERN = re.compile(r'[가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
 
 # 웰컴 메시지 템플릿
@@ -46,7 +47,15 @@ def extract_korean_name(text: str) -> str | None:
     text = text.strip()
     if not text:
         return None
+    
+    # 1) "나를 마에다라고 불러줘" 같은 명시적 패턴 우선 확인
+    name_request_match = _NAME_REQUEST_PATTERN.search(text)
+    if name_request_match:
+        extracted_name = name_request_match.group(1)  # 그룹 1에서 이름 추출
+        logger.info(f"\n[명시패턴] '나를 ~라고 불러' 패턴에서 이름 추출: '{extracted_name}'")
+        return extracted_name
         
+    # 2) 기존 패턴으로 fallback
     # 앞뒤 패턴 제거
     text = _NAME_PREFIX_PATTERN.sub('', text)
     text = _NAME_SUFFIX_PATTERN.sub('', text)
