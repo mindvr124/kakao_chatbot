@@ -223,7 +223,7 @@ async def skill_endpoint(
         
         # LogMessage에도 저장
         try:
-            await save_log_message(session, "INFO", f"SKILL REQUEST RECEIVED - user_id: {user_id}", user_id, None, "skill_endpoint")
+            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", user_id, None, "skill_endpoint")
         except Exception:
             pass
 
@@ -255,12 +255,7 @@ async def skill_endpoint(
             logger.info(f"\n[상태] 사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}")
             logger.info(f"\n[입력] 사용자 입력: '{user_text_stripped}'")
             
-            # LogMessage에도 저장
-            try:
-                await save_log_message(session, "INFO", f"사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}", user_id, None, "user_status")
-                await save_log_message(session, "INFO", f"사용자 입력: '{user_text_stripped}'", user_id, None, "user_input")
-            except Exception:
-                pass
+
             
             if user is None or user.user_name is None:
                 # 이름을 기다리는 중이었다면 이름 저장 시도
@@ -276,11 +271,7 @@ async def skill_endpoint(
                         if test_result['is_valid']:
                             logger.info(f"\n[검증] 이름 검증 통과: '{cand}', 저장 시작...")
                             
-                            # LogMessage에도 저장
-                            try:
-                                await save_log_message(session, "INFO", f"이름 검증 통과: '{cand}', 저장 시작", user_id, None, "name_validation")
-                            except Exception:
-                                pass
+
                             try:
                                 await save_user_name(session, user_id, cand)
                                 PendingNameCache.clear(user_id)
@@ -836,11 +827,7 @@ async def skill_endpoint(
         try:
             logger.info(f"Generating AI response for: {user_text}")
             
-            # LogMessage에도 저장
-            try:
-                await save_log_message(session, "INFO", f"AI 응답 생성 시작: {user_text[:100]}...", user_id, conv_id, "ai_generation")
-            except Exception:
-                pass
+
             try:
                 final_text, tokens_used = await asyncio.wait_for(
                     ai_service.generate_response(
@@ -857,11 +844,7 @@ async def skill_endpoint(
                 final_text, tokens_used = ("답변 생성이 길어졌어요. 잠시만 기다려주세요.", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
             
-            # LogMessage에도 저장
-            try:
-                await save_log_message(session, "INFO", f"AI 응답 생성 완료: {final_text[:100]}...", user_id, conv_id, "ai_generation")
-            except Exception:
-                pass
+
             try:
                 await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
