@@ -21,7 +21,7 @@ import random
 import re
 
 # 이름 추출을 위한 정규식 패턴들
-_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저)\s*', re.IGNORECASE)
+_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|나를를)\s*', re.IGNORECASE)
 _NAME_SUFFIX_PATTERN = re.compile(r'\s*(입니다|이에요|예요|에요|야|이야|라고\s*해|라고\s*해요|이라고\s*해|이라고\s*해요|합니다|불러|불러줘|라고\s*불러|라고\s*불러줘|이라고\s*불러|이라고\s*불러줘)\.?$', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
 
@@ -409,6 +409,33 @@ async def skill_endpoint(
                 except Exception:
                     pass
                 return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
+        
+        # 2-1.7) "나 희재야", "내 이름은 민수야" 같은 패턴에서 이름 자동 추출
+        if user and conv and not PendingNameCache.is_waiting(user_id):
+            # 이름 추출 시도
+            test_result = test_name_extraction(user_text_stripped)
+            extracted_name = test_result.get('extracted_name')
+            
+            if extracted_name and test_result.get('is_valid'):
+                logger.info(f"\n[자동추출] 이름 자동 추출 성공: '{extracted_name}'")
+                
+                # 현재 저장된 이름과 다른 경우에만 저장
+                if user.user_name != extracted_name:
+                    try:
+                        await save_user_name(session, user_id, extracted_name)
+                        try:
+                            await save_event_log(session, "name_auto_extracted", user_id, None, x_request_id, {
+                                "old_name": user.user_name,
+                                "new_name": extracted_name,
+                                "trigger": "auto_extraction"
+                            })
+                        except Exception:
+                            pass
+                        logger.info(f"\n[자동저장] 이름 자동 저장 완료: '{user.user_name}' -> '{extracted_name}'")
+                    except Exception as e:
+                        logger.warning(f"\n[경고] 이름 자동 저장 실패: {e}")
+                else:
+                    logger.info(f"\n[자동추출] 이미 동일한 이름: '{extracted_name}'")
 
         # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
         if user_text_stripped.startswith("/이름 "):
