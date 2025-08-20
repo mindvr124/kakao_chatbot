@@ -102,21 +102,34 @@ class PendingNameCache:
 
 async def save_user_name(session: AsyncSession, user_id: str, name: str):
     """appuser.user_name 저장/갱신"""
+    logger.info(f"Attempting to save user name: {user_id} -> {name}")
+    
     await upsert_user(session, user_id, name)  # user_name도 함께 전달
     await session.commit()
+    logger.info(f"User name saved successfully: {user_id} -> {name}")
     
     # 이름 변경 완료 로그 저장
     try:
         from app.database.service import save_log_message
-        await save_log_message(
+        logger.info(f"Attempting to save name change log for user: {user_id}")
+        
+        success = await save_log_message(
             session=session,
             level="INFO",
             message=f"사용자 이름이 '{name}'으로 변경되었습니다.",
             user_id=user_id,
             source="name_update"
         )
+        
+        if success:
+            logger.info(f"Name change log saved successfully for user: {user_id}")
+        else:
+            logger.warning(f"Failed to save name change log for user: {user_id}")
+            
     except Exception as e:
-        logger.warning(f"Failed to save name change log: {e}")
+        logger.error(f"Exception while saving name change log: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
 
 def kakao_text(text: str) -> JSONResponse:
     return JSONResponse(
