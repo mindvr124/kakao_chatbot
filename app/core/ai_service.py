@@ -389,12 +389,11 @@ class AIService:
                     session=session,
                     msg_id=msg.msg_id,
                     conv_id=conv_id,
-                    messages_json=messages_json,
                     model=self.model,
                     prompt_name=prompt_name,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
-                    request_id=None
+                    messages_json=messages_json
                 )
                 if not success:
                     logger.warning("Failed to save prompt log")
