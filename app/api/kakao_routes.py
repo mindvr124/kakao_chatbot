@@ -419,34 +419,36 @@ async def skill_endpoint(
                     pass
                 return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
         
-        # 2-1.7) "나 희재야", "내 이름은 민수야" 같은 패턴에서 이름 자동 추출
+                                            # 2-1.7) "~라고 불러줘" 패턴에서 이름 추출 (모든 사용자 발화에서 검사)
         if user and conv and not PendingNameCache.is_waiting(user_id):
-            # 이름 추출 시도
-            test_result = test_name_extraction(user_text_stripped)
-            extracted_name = test_result.get('extracted_name')
-            
-            if extracted_name and test_result.get('is_valid'):
-                logger.info(f"\n[자동추출] 이름 자동 추출 성공: '{extracted_name}'")
+            # "~라고 불러줘" 패턴 검사
+            name_request_match = _NAME_REQUEST_PATTERN.search(user_text_stripped)
+            if name_request_match:
+                extracted_name = name_request_match.group(1)  # 그룹 1에서 이름 추출
+                logger.info(f"\n[패턴감지] '~라고 불러' 패턴에서 이름 추출: '{extracted_name}'")
                 
-                # 현재 저장된 이름과 다른 경우에만 저장
-                if user.user_name != extracted_name:
-                    # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
-                    old_name = user.user_name
-                    try:
-                        await save_user_name(session, user_id, extracted_name)
+                if extracted_name and is_valid_name(extracted_name):
+                    # 현재 저장된 이름과 다른 경우에만 저장
+                    if user.user_name != extracted_name:
+                        # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
+                        old_name = user.user_name
                         try:
-                            await save_event_log(session, "name_auto_extracted", user_id, None, x_request_id, {
-                                "old_name": old_name,
-                                "new_name": extracted_name,
-                                "trigger": "auto_extraction"
-                            })
-                        except Exception:
-                            pass
-                        logger.info(f"\n[자동저장] 이름 자동 저장 완료: '{old_name}' -> '{extracted_name}'")
-                    except Exception as e:
-                        logger.warning(f"\n[경고] 이름 자동 저장 실패: {e}")
+                            await save_user_name(session, user_id, extracted_name)
+                            try:
+                                await save_event_log(session, "name_auto_extracted", user_id, None, x_request_id, {
+                                    "old_name": old_name,
+                                    "new_name": extracted_name,
+                                    "trigger": "pattern_detection"
+                                })
+                            except Exception:
+                                pass
+                            logger.info(f"\n[패턴저장] 이름 패턴 저장 완료: '{old_name}' -> '{extracted_name}'")
+                        except Exception as e:
+                            logger.warning(f"\n[경고] 이름 패턴 저장 실패: {e}")
+                    else:
+                        logger.info(f"\n[패턴감지] 이미 동일한 이름: '{extracted_name}'")
                 else:
-                    logger.info(f"\n[자동추출] 이미 동일한 이름: '{extracted_name}'")
+                    logger.warning(f"\n[패턴감지] 추출된 이름이 유효하지 않음: '{extracted_name}'")
 
         # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
         if user_text_stripped.startswith("/이름 "):
