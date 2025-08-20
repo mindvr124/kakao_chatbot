@@ -293,6 +293,13 @@ async def skill_endpoint(
             logger.bind(x_request_id=x_request_id).exception(f"Failed to check AppUser: {e}")
 
         # ====== [이름 플로우: 최우선 인터셉트] ==================================
+        # 대화 세션 생성 (이름 플로우에서 필요)
+        try:
+            conv = await get_or_create_conversation(session, user_id)
+        except Exception as e:
+            logger.warning(f"\n[경고] 대화 세션 생성 실패: {e}")
+            conv = None
+        
         # 2-1) '/이름' 명령만 온 경우 → 다음 발화를 이름으로 받기
         if user_text_stripped == "/이름":
             PendingNameCache.set_waiting(user_id)
@@ -303,7 +310,7 @@ async def skill_endpoint(
             return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
         
         # 2-1.5) 사용자 발화에 '이름'이 들어가고 AI가 이름을 요청한 경우 → 이름 대기 상태 설정
-        if user and user.user_name and "이름" in user_text_stripped:
+        if user and user.user_name and "이름" in user_text_stripped and conv:
             logger.info(f"\n[검사] 사용자 발화에 '이름' 포함: '{user_text_stripped}'")
             
             # AI의 이전 응답에서 이름 요청 패턴 확인
