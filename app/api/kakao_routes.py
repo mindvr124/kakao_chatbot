@@ -310,6 +310,38 @@ async def skill_endpoint(
             return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
         
         # 2-1.5) 사용자 발화에 '이름'이 들어가고 AI가 이름을 요청한 경우 → 이름 대기 상태 설정
+        # 먼저 이름 대기 상태인지 확인 (이전 요청에서 설정된 경우)
+        if PendingNameCache.is_waiting(user_id):
+            logger.info(f"\n[대기] 이름 대기 상태에서 입력 처리: '{user_text_stripped}'")
+            
+            # 취소 지원
+            if user_text_stripped in ("취소", "그만", "아냐", "아니야", "됐어", "아니"):
+                PendingNameCache.clear(user_id)
+                try:
+                    await save_event_log(session, "name_wait_cancel", user_id, None, x_request_id, None)
+                except Exception:
+                    pass
+                return kakao_text("좋아, 다음에 다시 알려줘!")
+            
+            # 이름 변경 처리 (기존 사용자 + 새 사용자 모두)
+            cand = clean_name(user_text_stripped)
+            if not is_valid_name(cand):
+                return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
+            
+            try:
+                await save_user_name(session, user_id, cand)
+                PendingNameCache.clear(user_id)
+                try:
+                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "ai_name_request"})
+                except Exception:
+                    pass
+                return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
+            except Exception as name_err:
+                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
+                PendingNameCache.clear(user_id)
+                return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
+        
+        # 2-1.6) 사용자 발화에 '이름'이 들어가고 AI가 이름을 요청한 경우 → 이름 대기 상태 설정
         if user and user.user_name and "이름" in user_text_stripped and conv:
             logger.info(f"\n[검사] 사용자 발화에 '이름' 포함: '{user_text_stripped}'")
             
@@ -341,6 +373,8 @@ async def skill_endpoint(
                             })
                         except Exception:
                             pass
+                        # 이름 변경 모드로 전환 - 다음 사용자 입력을 기다림
+                        logger.info(f"\n[전환] 이름 변경 모드로 전환됨: {user_id}")
                         return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
                     else:
                         logger.info(f"\n[감지] 이름 요청 패턴 없음")
@@ -378,33 +412,7 @@ async def skill_endpoint(
                 logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
 
-        # 2-3) 이전에 '/이름'을 받은 뒤 다음 발화가 온 경우 → 해당 발화를 이름으로 간주
-        if PendingNameCache.is_waiting(user_id):
-            # 취소 지원
-            if user_text_stripped in ("취소", "그만", "cancel", "Cancel"):
-                PendingNameCache.clear(user_id)
-                try:
-                    await save_event_log(session, "name_wait_cancel", user_id, None, x_request_id, None)
-                except Exception:
-                    pass
-                return kakao_text("좋아, 다음에 다시 알려줘!")
-            
-            # 이름 변경 처리 (기존 사용자 + 새 사용자 모두)
-            cand = clean_name(user_text_stripped)
-            if not is_valid_name(cand):
-                return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
-            
-            try:
-                await save_user_name(session, user_id, cand)
-                PendingNameCache.clear(user_id)
-                try:
-                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "name_change"})
-                except Exception:
-                    pass
-                return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
-            except Exception as name_err:
-                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
-                return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
+        # 2-3) 이전에 '/이름'을 받은 뒤 다음 발화가 온 경우 → 해당 발화를 이름으로 간주 (중복 제거됨)
 
         # ====== [이름 플로우 끝: 이하 기존 로직 유지] ===========================
 
