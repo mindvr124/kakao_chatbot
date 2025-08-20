@@ -302,16 +302,57 @@ async def skill_endpoint(
                 pass
             return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
         
-        # 2-1.5) 기존 사용자가 이름 변경을 원할 때 → 이름 대기 상태 설정
-        if user and user.user_name and user_text_stripped in ["이름 바꿔", "이름 변경", "다른 이름", "이름 바꾸고 싶어", "내 이름 그거 아"]:
-            # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
-            current_name = user.user_name
-            PendingNameCache.set_waiting(user_id)
+        # 2-1.5) 사용자 발화에 '이름'이 들어가고 AI가 이름을 요청한 경우 → 이름 대기 상태 설정
+        if user and user.user_name and "이름" in user_text_stripped:
+            logger.info(f"\n[검사] 사용자 발화에 '이름' 포함: '{user_text_stripped}'")
+            
+            # AI의 이전 응답에서 이름 요청 패턴 확인
             try:
-                await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name})
-            except Exception:
-                pass
-            return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
+                # 최근 AI 응답 조회
+                from app.database.service import get_latest_ai_response
+                latest_ai_response = await get_latest_ai_response(session, conv.conv_id)
+                
+                if latest_ai_response:
+                    logger.info(f"\n[AI응답] 최근 AI 응답: {latest_ai_response[:100]}...")
+                    
+                    # 이름 요청 패턴 확인
+                    name_request_patterns = ["불리고 싶은", "뭐라고", "이름이 뭐", "이름 알려줘"]
+                    matched_patterns = [pattern for pattern in name_request_patterns if pattern in latest_ai_response]
+                    
+                    if matched_patterns:
+                        logger.info(f"\n[감지] 이름 요청 패턴 발견: {matched_patterns}")
+                        
+                        # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
+                        current_name = user.user_name
+                        PendingNameCache.set_waiting(user_id)
+                        try:
+                            await save_event_log(session, "name_change_request", user_id, None, x_request_id, {
+                                "current_name": current_name, 
+                                "trigger": "ai_name_request",
+                                "matched_patterns": matched_patterns,
+                                "ai_response": latest_ai_response[:200]
+                            })
+                        except Exception:
+                            pass
+                        return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
+                    else:
+                        logger.info(f"\n[감지] 이름 요청 패턴 없음")
+                else:
+                    logger.info(f"\n[감지] AI 응답 없음")
+                    
+            except Exception as e:
+                logger.warning(f"\n[경고] AI 응답 확인 중 오류: {e}")
+                
+            # AI 응답 확인 실패 또는 패턴 불일치 시 기존 로직으로 fallback
+            if user_text_stripped in ["이름 바꿔", "이름 변경", "다른 이름", "이름 바꾸고 싶어", "내 이름 그거 아", "이름 바꿀", "다르게 불러줘줘"]:
+                logger.info(f"\n[fallback] 명시적 이름 변경 요청 감지")
+                current_name = user.user_name
+                PendingNameCache.set_waiting(user_id)
+                try:
+                    await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name, "trigger": "explicit_request"})
+                except Exception:
+                    pass
+                return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
 
         # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
         if user_text_stripped.startswith("/이름 "):

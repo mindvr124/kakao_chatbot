@@ -375,3 +375,25 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
     return True
 
 ## removed response state helpers
+
+async def get_latest_ai_response(session: AsyncSession, conv_id: UUID) -> str | None:
+    """대화에서 가장 최근 AI 응답 조회"""
+    try:
+        from app.database.models import Message, MessageRole
+        
+        # 가장 최근 AI 응답 조회
+        result = await session.execute(
+            select(Message.content)
+            .where(Message.conv_id == conv_id, Message.role == MessageRole.ASSISTANT)
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+        
+        latest_response = result.scalar_one_or_none()
+        if latest_response:
+            logger.debug(f"\n[조회] 최근 AI 응답: {latest_response[:50]}...")
+        return latest_response
+        
+    except Exception as e:
+        logger.warning(f"\n[경고] 최근 AI 응답 조회 실패: {e}")
+        return None
