@@ -125,34 +125,14 @@ class AIService:
 
     def _extract_name_from_response(self, user_input: str) -> str | None:
         """사용자 응답에서 이름을 추출합니다."""
-            
-        # 사용자 응답에서 이름 추출 패턴
-        response_patterns = [
-            # "이름은 ~" 패턴
-            r"이름은\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            # "나는 ~" 패턴
-            r"나는\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            # "난 ~" 패턴
-            r"난\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            # "~라고 해/불러줘" 패턴
-            r"([가-힣a-zA-Z]+)(?:이라고|라고)\s*(?:해|불러|불러줘)",
-            # 단순 이름만 말하는 패턴
-            r"^([가-힣a-zA-Z]{2,})$",
-            r"저는\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"전\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"나\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"내 이름\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"내 이름은\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"나\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
-            r"나\s*([가-힣a-zA-Z])"
-        ]
+        from app.api.kakao_routes import extract_korean_name, clean_name, is_valid_name
         
-        for pattern in response_patterns:
-            match = re.search(pattern, user_input.strip())
-            if match:
-                name = match.group(1)
-                if len(name) >= 2:  # 최소 2글자 이상인 경우만 이름으로 인정
-                    return name
+        # kakao_routes.py의 이름 추출 로직 사용
+        name = extract_korean_name(user_input)
+        if name:
+            cand = clean_name(name)
+            if is_valid_name(cand):
+                return cand
         return None
 
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
