@@ -50,19 +50,11 @@ class PromptTemplate(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     created_by: Optional[str] = None  # 생성자
 
-## Removed: ResponseState (unused)
-
-class CounselSummary(SQLModel, table=True):
-    """대화 요약 저장 테이블"""
-    id: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_id: str = Field(foreign_key="appuser.user_id", index=True)
-    conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
-    content: str
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+## Removed: ResponseState, CounselSummary (unused)
 
 class PromptLog(SQLModel, table=True):
     """모델 호출 시 최종 프롬프트(메시지 배열)와 파라미터를 저장"""
-    log_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    msg_id: UUID = Field(primary_key=True, foreign_key="message.msg_id")  # Message와 1:1 관계
     conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
     request_id: str | None = Field(default=None, index=True)
     model: str | None = None

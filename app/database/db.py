@@ -20,6 +20,7 @@ engine: AsyncEngine = create_async_engine(
     pool_timeout=30,  # 연결 대기 시간 (초)
     pool_recycle=3600,  # 연결 재생성 시간 (1시간)
     pool_reset_on_return='commit',  # 세션 반환 시 커밋으로 리셋
+    connect_args={"server_settings": {"timezone": "Asia/Seoul"}}
 )
 
 AsyncSessionLocal = sessionmaker(

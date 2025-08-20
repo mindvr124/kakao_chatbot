@@ -3,7 +3,7 @@ from sqlmodel import select
 from typing import Optional
 from loguru import logger
 
-from app.database.models import Message, Conversation, CounselSummary, UserSummary
+from app.database.models import Message, Conversation, UserSummary
 from app.database.service import save_event_log
 
 class SummaryResponse:
@@ -96,68 +96,7 @@ async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
         lines.append(f"{prefix} {m.content}")
     return "\n".join(lines)
 
-async def save_counsel_summary(session: AsyncSession, user_id: str, conv_id, content: str) -> Optional[CounselSummary]:
-    """요약을 conv_id 단위로 upsert. 이미 존재하면 내용과 시간을 갱신(덮어쓰기)."""
-    if not content or len(content.strip()) < 30:
-        return None
-    # conv_id로 기존 요약 조회
-    stmt = (
-        select(CounselSummary)
-        .where(CounselSummary.conv_id == conv_id)
-        .limit(1)
-    )
-    try:
-        res = await session.execute(stmt)
-    except Exception:
-        try:
-            await session.rollback()
-            res = await session.execute(stmt)
-        except Exception as e:
-            logger.warning(f"save_counsel_summary select failed after rollback: {e}")
-            return None
-    existing = res.scalar_one_or_none()
 
-    if existing:
-        existing.content = content.strip()
-        # created_at을 최신으로 갱신(별도 updated_at 컬럼 없이 요구사항 충족)
-        from datetime import datetime
-        existing.created_at = datetime.now()
-        try:
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        await session.refresh(existing)
-        return existing
-
-    summary = CounselSummary(user_id=user_id, conv_id=conv_id, content=content.strip())
-    session.add(summary)
-    try:
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        raise
-    await session.refresh(summary)
-    return summary
-
-async def get_last_counsel_summary(session: AsyncSession, user_id: str) -> Optional[str]:
-    stmt = (
-        select(CounselSummary)
-        .where(CounselSummary.user_id == user_id)
-        .order_by(CounselSummary.created_at.desc())
-        .limit(1)
-    )
-    try:
-        res = await session.execute(stmt)
-    except Exception:
-        try:
-            await session.rollback()
-            res = await session.execute(stmt)
-        except Exception as e:
-            logger.warning(f"get_last_counsel_summary failed after rollback: {e}")
-            return None
-    s = res.scalar_one_or_none()
-    return s.content if s else None
 
 async def get_or_init_user_summary(session: AsyncSession, user_id: str) -> UserSummary:
     try:
@@ -278,8 +217,7 @@ async def upsert_user_summary_from_text(
     user_id: str,
     summary_text: str,
 ) -> None:
-    """CounselSummary 결과를 UserSummary에도 즉시 반영.
-    - 마지막 3개를 carryover로 유지
+    """UserSummary를 텍스트로 업데이트.
     - last_message_created_at 포인터 갱신
     """
     if not summary_text:
@@ -313,19 +251,4 @@ async def upsert_user_summary_from_text(
         await session.rollback()
         raise
 
-async def get_counsel_summary_by_conv(session: AsyncSession, conv_id) -> Optional[CounselSummary]:
-    stmt = (
-        select(CounselSummary)
-        .where(CounselSummary.conv_id == conv_id)
-        .limit(1)
-    )
-    try:
-        res = await session.execute(stmt)
-    except Exception:
-        try:
-            await session.rollback()
-            res = await session.execute(stmt)
-        except Exception as e:
-            logger.warning(f"get_counsel_summary_by_conv failed after rollback: {e}")
-            return None
-    return res.scalar_one_or_none()
+

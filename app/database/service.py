@@ -4,6 +4,7 @@ from app.database.models import AppUser, Conversation, Message, PromptTemplate, 
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
+from uuid import UUID
 
 async def get_user_name(session: AsyncSession, user_id: str) -> str | None:
     """사용자 이름을 조회합니다. 없으면 None을 반환합니다."""
@@ -136,6 +137,7 @@ async def save_message(
 
 async def save_prompt_log(
     session: AsyncSession,
+    msg_id: UUID,  # 필수 파라미터로 변경
     conv_id,
     messages_json: str,
     model: str | None,
@@ -143,7 +145,8 @@ async def save_prompt_log(
     temperature: float | None,
     max_tokens: int | None,
     request_id: str | None = None,
-):
+) -> bool:
+    """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
         from uuid import UUID
         conv_uuid = None
@@ -152,6 +155,7 @@ async def save_prompt_log(
         except Exception:
             conv_uuid = None
         log = PromptLog(
+            msg_id=msg_id,  # primary key로 사용
             conv_id=conv_uuid,
             request_id=request_id,
             model=model,
@@ -162,9 +166,10 @@ async def save_prompt_log(
         )
         session.add(log)
         await session.commit()
+        return True
     except Exception:
-        # 로깅 실패는 무시
-        pass
+        # 로깅 실패는 무시하되 실패 상태 반환
+        return False
 
 async def save_event_log(
     session: AsyncSession,

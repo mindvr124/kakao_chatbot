@@ -10,11 +10,12 @@ from loguru import logger
 from app.database.models import Message, PromptTemplate, Conversation
 from app.utils.utils import extract_user_id
 from app.config import settings
-from app.core.summary import get_last_counsel_summary, get_or_init_user_summary, maybe_rollup_user_summary
+from app.core.summary import get_or_init_user_summary, maybe_rollup_user_summary
 from app.database.service import save_prompt_log
 import json
 from app.core.observability import traceable
 from app.utils.utils import remove_markdown
+import re
 
 class AIService:
     def __init__(self):
@@ -31,6 +32,9 @@ class AIService:
         self.temperature = settings.openai_temperature
         self.max_tokens = settings.openai_max_tokens
         self.default_system_prompt = """당신은 전문 AI 심리상담가입니다. 친근하고 공감적인 말로 간결하게 답변하세요. 지금까지의 대화 내용은 아래 요약을 먼저 참고하여, 맥락에 맞게 대화를 이어가세요."""
+        
+        # 이름 물어보기 상태 추적을 위한 캐시
+        self._name_request_cache = {}
 
     @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
@@ -109,8 +113,66 @@ class AIService:
         return list(result.scalars().all())
 
     @traceable
+    def _is_asking_name(self, message: str) -> bool:
+        """AI 메시지가 이름을 물어보는 내용인지 확인합니다."""
+        name_asking_patterns = [
+            r"불리고\s*싶은",
+            r"뭐라고\s*부르면",
+            r"이름이\s*뭐",
+            r"이름\s*알려줘"
+        ]
+        return any(re.search(pattern, message) for pattern in name_asking_patterns)
+
+    def _extract_name_from_response(self, user_input: str) -> str | None:
+        """사용자 응답에서 이름을 추출합니다."""
+            
+        # 사용자 응답에서 이름 추출 패턴
+        response_patterns = [
+            # "이름은 ~" 패턴
+            r"이름은\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            # "나는 ~" 패턴
+            r"나는\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            # "난 ~" 패턴
+            r"난\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            # "~라고 해/불러줘" 패턴
+            r"([가-힣a-zA-Z]+)(?:이라고|라고)\s*(?:해|불러|불러줘)",
+            # 단순 이름만 말하는 패턴
+            r"^([가-힣a-zA-Z]{2,})$",
+            r"저는\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"전\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"나\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"내 이름\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"내 이름은\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"나\s*([가-힣a-zA-Z]+)(?:이야|야|입니다|이에요|예요|에요|여)",
+            r"나\s*([가-힣a-zA-Z])"
+        ]
+        
+        for pattern in response_patterns:
+            match = re.search(pattern, user_input.strip())
+            if match:
+                name = match.group(1)
+                if len(name) >= 2:  # 최소 2글자 이상인 경우만 이름으로 인정
+                    return name
+        return None
+
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
         """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
+        # 이전 AI 메시지와 현재 사용자 입력을 기반으로 이름 추출 시도
+        if user_id and conv_id:
+            try:
+                # 이전 AI 메시지 가져오기
+                history = await self.get_conversation_history(session, conv_id)
+                if history:
+                    last_ai_msg = next((msg for msg in reversed(history) 
+                                      if str(msg.role).lower() == "assistant"), None)
+                    if last_ai_msg:
+                        extracted_name = self._extract_name_from_response(last_ai_msg.content, user_input)
+                        if extracted_name:
+                            from app.database.service import upsert_user
+                            await upsert_user(session, user_id, extracted_name)
+            except Exception as e:
+                logger.warning(f"Failed to process name extraction: {e}")
+
         # conv_id가 UUID일때만 대화 히스토리 조회
         conv_uuid: UUID | None = None
         try:
@@ -189,31 +251,10 @@ class AIService:
             except Exception:
                 pass
         else:
-            # CounselSummary ?�백 ?�도
-            fallback_summary = None
             try:
-                fallback_summary = await get_last_counsel_summary(session, target_user_id or "")
-            except Exception as e:
-                try:
-                    await session.rollback()
-                    fallback_summary = await get_last_counsel_summary(session, target_user_id or "")
-                except Exception:
-                    logger.warning(f"get_last_counsel_summary failed after rollback: {e}")
-                    fallback_summary = None
-            if (fallback_summary or "").strip():
-                messages.append({
-                    "role": "system",
-                    "content": f"이전 상담 요약(세션 기반):\n{(fallback_summary or '').strip()}"
-                })
-                try:
-                    logger.info(f"Prompt includes counsel summary fallback (user_id={target_user_id}, chars={len((fallback_summary or '').strip())})")
-                except Exception:
-                    pass
-            else:
-                try:
-                    logger.info(f"No user summary found for user_id={target_user_id}; using history only")
-                except Exception:
-                    pass
+                logger.info(f"No user summary found for user_id={target_user_id}; using history only")
+            except Exception:
+                pass
 
         # 히스토리 구성 규칙
         # - 요약이 없으면 대화 시작부터 누적하여 최대 20 메시지 전송
@@ -247,6 +288,18 @@ class AIService:
     async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> tuple[str, int]:
         """Chat Completions로 전체 히스토리와 요약(지난번 대화)을 포함한 답변을 생성합니다."""
         try:
+            # 이름을 물어본 상태였다면 이름 추출 시도
+            if user_id and conv_id and str(conv_id) in self._name_request_cache:
+                try:
+                    extracted_name = self._extract_name_from_response(user_input)
+                    if extracted_name:
+                        from app.database.service import upsert_user
+                        await upsert_user(session, user_id, extracted_name)
+                except Exception as e:
+                    logger.warning(f"Failed to process name extraction: {e}")
+                # 상태 초기화
+                del self._name_request_cache[str(conv_id)]
+
             messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
 
             logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
@@ -316,6 +369,42 @@ class AIService:
                 content = remove_markdown(content)
             except Exception:
                 pass
+
+            # 응답 메시지 저장 및 프롬프트 로그 생성
+            try:
+                from app.database.models import Message, MessageRole
+                msg = Message(
+                    conv_id=conv_id,
+                    user_id=user_id,
+                    role=MessageRole.ASSISTANT,
+                    content=content,
+                    tokens=tokens_used
+                )
+                session.add(msg)
+                await session.commit()
+                await session.refresh(msg)
+
+                # 메시지 ID로 프롬프트 로그 저장
+                success = await save_prompt_log(
+                    session=session,
+                    msg_id=msg.msg_id,
+                    conv_id=conv_id,
+                    messages_json=messages_json,
+                    model=self.model,
+                    prompt_name=prompt_name,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    request_id=None
+                )
+                if not success:
+                    logger.warning("Failed to save prompt log")
+
+                # AI가 이름을 물어보는 메시지인지 확인하고 캐시 설정
+                if conv_id and self._is_asking_name(content):
+                    self._name_request_cache[str(conv_id)] = True
+
+            except Exception as e:
+                logger.warning(f"Failed to save message or prompt log: {e}")
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
             return content, tokens_used
