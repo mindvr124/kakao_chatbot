@@ -23,7 +23,7 @@ import re
 # 이름 추출을 위한 정규식 패턴들
 _NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|나를를)\s*', re.IGNORECASE)
 _NAME_SUFFIX_PATTERN = re.compile(r'\s*(입니다|이에요|예요|에요|야|이야|라고\s*해|라고\s*해요|이라고\s*해|이라고\s*해요|합니다|불러|불러줘|라고\s*불러|라고\s*불러줘|이라고\s*불러|이라고\s*불러줘)\.?$', re.IGNORECASE)
-_NAME_REQUEST_PATTERN = re.compile(r'[가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
+_NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
 
 # 웰컴 메시지 템플릿
