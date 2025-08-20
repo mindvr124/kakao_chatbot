@@ -373,7 +373,7 @@ class AIService:
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     messages_json=messages_json,
-                    msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
+                    msg_id=msg.msg_id,  # Message의 msg_id를 PromptLog의 primary key로 사용
                 )
                 if not success:
                     logger.warning("Failed to save prompt log")

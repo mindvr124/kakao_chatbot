@@ -57,7 +57,6 @@ class PromptLog(SQLModel, table=True):
     """모델 호출 시 최종 프롬프트(메시지 배열)와 파라미터를 저장"""
     msg_id: UUID = Field(primary_key=True, foreign_key="message.msg_id")  # Message와 1:1 관계
     conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
-    request_id: str | None = Field(default=None, index=True)
     model: str | None = None
     prompt_name: str | None = None
     temperature: float | None = None

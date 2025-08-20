@@ -143,7 +143,7 @@ async def save_prompt_log(
     temperature: float | None = None,
     max_tokens: int | None = None,
     messages_json: str = "",
-    msg_id: UUID = None,  # Message와 1:1 관계
+    msg_id: UUID = None,  # Message와 1:1 관계 (primary key)
 ) -> bool:
     """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
@@ -160,7 +160,7 @@ async def save_prompt_log(
             temperature=temperature,
             max_tokens=max_tokens,
             messages_json=messages_json,
-            msg_id=msg_id  # primary key로 사용
+            msg_id=msg_id,  # primary key로 사용
         )
         session.add(log)
         await session.commit()
