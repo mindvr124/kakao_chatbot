@@ -430,17 +430,19 @@ async def skill_endpoint(
                 
                 # 현재 저장된 이름과 다른 경우에만 저장
                 if user.user_name != extracted_name:
+                    # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
+                    old_name = user.user_name
                     try:
                         await save_user_name(session, user_id, extracted_name)
                         try:
                             await save_event_log(session, "name_auto_extracted", user_id, None, x_request_id, {
-                                "old_name": user.user_name,
+                                "old_name": old_name,
                                 "new_name": extracted_name,
                                 "trigger": "auto_extraction"
                             })
                         except Exception:
                             pass
-                        logger.info(f"\n[자동저장] 이름 자동 저장 완료: '{user.user_name}' -> '{extracted_name}'")
+                        logger.info(f"\n[자동저장] 이름 자동 저장 완료: '{old_name}' -> '{extracted_name}'")
                     except Exception as e:
                         logger.warning(f"\n[경고] 이름 자동 저장 실패: {e}")
                 else:
