@@ -55,13 +55,23 @@ class PromptTemplate(SQLModel, table=True):
 
 class PromptLog(SQLModel, table=True):
     """모델 호출 시 최종 프롬프트(메시지 배열)와 파라미터를 저장"""
-    msg_id: UUID = Field(primary_key=True, foreign_key="message.msg_id")  # Message와 1:1 관계
     conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
     model: str | None = None
     prompt_name: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
     messages_json: str  # JSON 직렬화된 messages
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
+    msg_id: UUID = Field(primary_key=True, foreign_key="message.msg_id")  # Message와 1:1 관계
+
+class LogMessage(SQLModel, table=True):
+    """로그 메시지 저장 테이블"""
+    log_id: UUID = Field(default_factory=uuid4, primary_key=True)
+    level: str = Field(index=True)  # INFO, WARNING, ERROR, DEBUG
+    message: str
+    user_id: str | None = Field(default=None, index=True)
+    conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
+    source: str | None = None  # 어느 모듈에서 발생한 로그인지
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
 class EventLog(SQLModel, table=True):

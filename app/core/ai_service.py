@@ -241,7 +241,7 @@ class AIService:
             # 프롬프트 로깅 (비차단)
             try:
                 messages_json = json.dumps(messages, ensure_ascii=False)
-                await save_prompt_log(session, conv_id, messages_json, self.model, prompt_name, self.temperature, self.max_tokens, None)
+                # save_prompt_log는 나중에 msg_id와 함께 호출됨
             except Exception:
                 pass
 

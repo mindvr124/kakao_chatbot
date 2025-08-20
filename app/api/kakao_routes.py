@@ -104,6 +104,19 @@ async def save_user_name(session: AsyncSession, user_id: str, name: str):
     """appuser.user_name 저장/갱신"""
     await upsert_user(session, user_id, name)  # user_name도 함께 전달
     await session.commit()
+    
+    # 이름 변경 완료 로그 저장
+    try:
+        from app.database.service import save_log_message
+        await save_log_message(
+            session=session,
+            level="INFO",
+            message=f"사용자 이름이 '{name}'으로 변경되었습니다.",
+            user_id=user_id,
+            source="name_update"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save name change log: {e}")
 
 def kakao_text(text: str) -> JSONResponse:
     return JSONResponse(

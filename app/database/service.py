@@ -137,13 +137,13 @@ async def save_message(
 
 async def save_prompt_log(
     session: AsyncSession,
+    msg_id: UUID,  # Message와 1:1 관계 (primary key, 필수)
     conv_id,
     model: str | None = None,
     prompt_name: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
     messages_json: str = "",
-    msg_id: UUID = None,  # Message와 1:1 관계 (primary key)
 ) -> bool:
     """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
@@ -167,6 +167,42 @@ async def save_prompt_log(
         return True
     except Exception:
         # 로깅 실패는 무시하되 실패 상태 반환
+        return False
+
+async def save_log_message(
+    session: AsyncSession,
+    level: str,
+    message: str,
+    user_id: str | None = None,
+    conv_id = None,
+    source: str | None = None,
+) -> bool:
+    """로그 메시지를 저장합니다. 성공 여부를 반환합니다."""
+    try:
+        from app.database.models import LogMessage
+        from uuid import UUID
+        
+        conv_uuid = None
+        try:
+            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
+        except Exception:
+            conv_uuid = None
+            
+        log_msg = LogMessage(
+            level=level,
+            message=message,
+            user_id=user_id,
+            conv_id=conv_uuid,
+            source=source
+        )
+        session.add(log_msg)
+        await session.commit()
+        return True
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         return False
 
 async def save_event_log(
