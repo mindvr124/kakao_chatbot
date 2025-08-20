@@ -33,8 +33,7 @@ class AIService:
         self.max_tokens = settings.openai_max_tokens
         self.default_system_prompt = """당신은 전문 AI 심리상담가입니다. 친근하고 공감적인 말로 간결하게 답변하세요. 지금까지의 대화 내용은 아래 요약을 먼저 참고하여, 맥락에 맞게 대화를 이어가세요."""
         
-        # 이름 물어보기 상태 추적을 위한 캐시
-        self._name_request_cache = {}
+        # 이름 추출은 kakao_routes.py에서 처리하므로 캐시 제거
 
     @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
@@ -112,46 +111,11 @@ class AIService:
                 return []
         return list(result.scalars().all())
 
-    @traceable
-    def _is_asking_name(self, message: str) -> bool:
-        """AI 메시지가 이름을 물어보는 내용인지 확인합니다."""
-        name_asking_patterns = [
-            r"불리고\s*싶은",
-            r"뭐라고\s*부르면",
-            r"이름이\s*뭐",
-            r"이름\s*알려줘"
-        ]
-        return any(re.search(pattern, message) for pattern in name_asking_patterns)
-
-    def _extract_name_from_response(self, user_input: str) -> str | None:
-        """사용자 응답에서 이름을 추출합니다."""
-        from app.api.kakao_routes import extract_korean_name, clean_name, is_valid_name
-        
-        # kakao_routes.py의 이름 추출 로직 사용
-        name = extract_korean_name(user_input)
-        if name:
-            cand = clean_name(name)
-            if is_valid_name(cand):
-                return cand
-        return None
+    # 이름 추출 관련 함수들은 kakao_routes.py에서 처리하므로 제거
 
     async def build_messages(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> List[dict]:
         """시스템 프롬프트 + (이전 요약) + 전체 히스토리 + 현재 사용자 입력을 구축합니다."""
-        # 이전 AI 메시지와 현재 사용자 입력을 기반으로 이름 추출 시도
-        if user_id and conv_id:
-            try:
-                # 이전 AI 메시지 가져오기
-                history = await self.get_conversation_history(session, conv_id)
-                if history:
-                    last_ai_msg = next((msg for msg in reversed(history) 
-                                      if str(msg.role).lower() == "assistant"), None)
-                    if last_ai_msg:
-                        extracted_name = self._extract_name_from_response(last_ai_msg.content, user_input)
-                        if extracted_name:
-                            from app.database.service import upsert_user
-                            await upsert_user(session, user_id, extracted_name)
-            except Exception as e:
-                logger.warning(f"Failed to process name extraction: {e}")
+        # 이름 추출은 kakao_routes.py에서 처리하므로 여기서는 제거
 
         # conv_id가 UUID일때만 대화 히스토리 조회
         conv_uuid: UUID | None = None
@@ -268,17 +232,7 @@ class AIService:
     async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> tuple[str, int]:
         """Chat Completions로 전체 히스토리와 요약(지난번 대화)을 포함한 답변을 생성합니다."""
         try:
-            # 이름을 물어본 상태였다면 이름 추출 시도
-            if user_id and conv_id and str(conv_id) in self._name_request_cache:
-                try:
-                    extracted_name = self._extract_name_from_response(user_input)
-                    if extracted_name:
-                        from app.database.service import upsert_user
-                        await upsert_user(session, user_id, extracted_name)
-                except Exception as e:
-                    logger.warning(f"Failed to process name extraction: {e}")
-                # 상태 초기화
-                del self._name_request_cache[str(conv_id)]
+            # 이름 추출은 kakao_routes.py에서 처리하므로 여기서는 제거
 
             messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
 
@@ -373,14 +327,12 @@ class AIService:
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
                     messages_json=messages_json,
-                    msg_id=msg.msg_id,  # Message의 msg_id를 PromptLog의 primary key로 사용
+                    msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
                 )
                 if not success:
                     logger.warning("Failed to save prompt log")
 
-                # AI가 이름을 물어보는 메시지인지 확인하고 캐시 설정
-                if conv_id and self._is_asking_name(content):
-                    self._name_request_cache[str(conv_id)] = True
+                # 이름 추출은 kakao_routes.py에서 처리하므로 제거
 
             except Exception as e:
                 logger.warning(f"Failed to save message or prompt log: {e}")

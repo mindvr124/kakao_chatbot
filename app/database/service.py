@@ -160,7 +160,7 @@ async def save_prompt_log(
             temperature=temperature,
             max_tokens=max_tokens,
             messages_json=messages_json,
-            msg_id=msg_id,  # primary key로 사용
+            msg_id=msg_id  # primary key로 사용
         )
         session.add(log)
         await session.commit()
