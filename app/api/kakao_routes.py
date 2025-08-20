@@ -101,12 +101,14 @@ class PendingNameCache:
         cls._store.pop(user_id, None)
 
 async def save_user_name(session: AsyncSession, user_id: str, name: str):
-    """appuser.user_name 저장/갱신"""
-    logger.info(f"Attempting to save user name: {user_id} -> {name}")
+    """appuser.user_name 저장/갱신 (INSERT 또는 UPDATE)"""
+    logger.info(f"Attempting to save/update user name: {user_id} -> {name}")
     
-    await upsert_user(session, user_id, name)  # user_name도 함께 전달
-    await session.commit()
-    logger.info(f"User name saved successfully: {user_id} -> {name}")
+    # upsert_user는 사용자가 없으면 INSERT, 있으면 UPDATE를 수행
+    user = await upsert_user(session, user_id, name)
+    
+    # 이미 commit이 되었으므로 추가 commit 불필요
+    logger.info(f"User name saved/updated successfully: {user_id} -> {name} (operation: {'INSERT' if not user.user_name else 'UPDATE'})")
     
     # 이름 변경 완료 로그 저장
     try:
@@ -196,22 +198,30 @@ async def skill_endpoint(
         # AppUser 테이블에서 사용자 이름 확인
         try:
             user = await session.get(AppUser, user_id)
+            logger.info(f"Current user state: user_id={user_id}, user={user}, user_name={user.user_name if user else None}")
+            logger.info(f"PendingNameCache.is_waiting({user_id}) = {PendingNameCache.is_waiting(user_id)}")
+            
             if user is None or user.user_name is None:
                 # 이름을 기다리는 중이었다면 이름 저장 시도
                 if PendingNameCache.is_waiting(user_id):
+                    logger.info(f"Processing name input for waiting user: '{user_text_stripped}'")
                     text = _NAME_PREFIX_PATTERN.sub('', user_text_stripped)
                     text = _NAME_SUFFIX_PATTERN.sub('', text)
                     text = text.strip()
+                    logger.info(f"After pattern removal: '{text}'")
                     
                     name = None
                     if text:
                         match = _KOREAN_NAME_PATTERN.search(text)
                         if match:
                             name = match.group()
+                            logger.info(f"Korean name pattern match: '{name}'")
                     
                     if name:
                         cand = clean_name(name)
+                        logger.info(f"Cleaned name: '{cand}'")
                         if is_valid_name(cand):
+                            logger.info(f"Name validation passed: '{cand}'")
                             try:
                                 await save_user_name(session, user_id, cand)
                                 PendingNameCache.clear(user_id)
@@ -224,8 +234,10 @@ async def skill_endpoint(
                                 logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed in first chat: {e}")
                                 PendingNameCache.clear(user_id)
                         else:
+                            logger.warning(f"Name validation failed: '{cand}'")
                             return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
                     else:
+                        logger.info(f"No name extracted from text: '{user_text_stripped}'")
                         return kakao_text("불리고 싶은 이름을 알려줘! 그럼 나온이가 꼭 기억할게~")
                 
                 # 인삿말이 오면 웰컴 메시지로 응답
