@@ -1,6 +1,7 @@
 from typing import Optional
 from sqlmodel import SQLModel, Field, Relationship
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from uuid import uuid4, UUID
 from enum import Enum
 
@@ -35,7 +36,7 @@ class Message(SQLModel, table=True):
     content: str
     tokens: Optional[int] = None
     request_id: Optional[str] = Field(default=None, index=True)  # X-Request-ID 값
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")), index=True)
 
 ## Removed: AIProcessingTask (unused)
 
@@ -47,7 +48,7 @@ class PromptTemplate(SQLModel, table=True):
     user_prompt_template: Optional[str] = None  # 사용자 입력 템플릿(옵션)
     is_active: bool = Field(default=True, index=True)  # 활성화 여부
     description: Optional[str] = None  # 프롬프트 설명
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")), index=True)
     created_by: Optional[str] = None  # 생성자
 
 ## Removed: ResponseState, CounselSummary (unused)
@@ -62,7 +63,7 @@ class PromptLog(SQLModel, table=True):
     temperature: float | None = None
     max_tokens: int | None = None
     messages_json: str  # JSON 직렬화된 messages
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")), index=True)
 
 class EventLog(SQLModel, table=True):
     """운영 이벤트 로깅 테이블(요청 수신, 메시지 저장, 콜백, 요약 성공/실패 등)"""
@@ -72,7 +73,7 @@ class EventLog(SQLModel, table=True):
     conv_id: Optional[UUID] = Field(default=None, foreign_key="conversation.conv_id", index=True)
     request_id: Optional[str] = Field(default=None, index=True)
     details_json: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")), index=True)
 
 class UserSummary(SQLModel, table=True):
     """사용자 단위 누적 요약 및 롤업 진도와 상태 (파일 단위)"""

@@ -387,13 +387,13 @@ class AIService:
                 # 메시지 ID로 프롬프트 로그 저장
                 success = await save_prompt_log(
                     session=session,
-                    msg_id=msg.msg_id,
                     conv_id=conv_id,
                     model=self.model,
                     prompt_name=prompt_name,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,
-                    messages_json=messages_json
+                    messages_json=messages_json,
+                    msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
                 )
                 if not success:
                     logger.warning("Failed to save prompt log")

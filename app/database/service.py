@@ -137,14 +137,13 @@ async def save_message(
 
 async def save_prompt_log(
     session: AsyncSession,
-    msg_id: UUID,  # 필수 파라미터로 변경
     conv_id,
-    messages_json: str,
-    model: str | None,
-    prompt_name: str | None,
-    temperature: float | None,
-    max_tokens: int | None,
-    request_id: str | None = None,
+    model: str | None = None,
+    prompt_name: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    messages_json: str = "",
+    msg_id: UUID = None,  # Message와 1:1 관계
 ) -> bool:
     """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
@@ -155,14 +154,13 @@ async def save_prompt_log(
         except Exception:
             conv_uuid = None
         log = PromptLog(
-            msg_id=msg_id,  # primary key로 사용
             conv_id=conv_uuid,
-            request_id=request_id,
             model=model,
             prompt_name=prompt_name,
             temperature=temperature,
             max_tokens=max_tokens,
             messages_json=messages_json,
+            msg_id=msg_id  # primary key로 사용
         )
         session.add(log)
         await session.commit()
