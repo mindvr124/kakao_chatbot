@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
-from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log
+from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log, save_log_message
 from app.database.models import AppUser
 from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
@@ -220,6 +220,12 @@ async def skill_endpoint(
         
         user_id = extract_user_id(body_dict)
         logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
+        
+        # LogMessage에도 저장
+        try:
+            await save_log_message(session, "INFO", f"SKILL REQUEST RECEIVED - user_id: {user_id}", user_id, None, "skill_endpoint")
+        except Exception:
+            pass
 
         # 폴백: user_id가 비어있으면 익명 + X-Request-ID 사용
         if not user_id:
@@ -249,6 +255,13 @@ async def skill_endpoint(
             logger.info(f"\n[상태] 사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}")
             logger.info(f"\n[입력] 사용자 입력: '{user_text_stripped}'")
             
+            # LogMessage에도 저장
+            try:
+                await save_log_message(session, "INFO", f"사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}", user_id, None, "user_status")
+                await save_log_message(session, "INFO", f"사용자 입력: '{user_text_stripped}'", user_id, None, "user_input")
+            except Exception:
+                pass
+            
             if user is None or user.user_name is None:
                 # 이름을 기다리는 중이었다면 이름 저장 시도
                 if PendingNameCache.is_waiting(user_id):
@@ -262,6 +275,12 @@ async def skill_endpoint(
                         cand = test_result['cleaned_name']
                         if test_result['is_valid']:
                             logger.info(f"\n[검증] 이름 검증 통과: '{cand}', 저장 시작...")
+                            
+                            # LogMessage에도 저장
+                            try:
+                                await save_log_message(session, "INFO", f"이름 검증 통과: '{cand}', 저장 시작", user_id, None, "name_validation")
+                            except Exception:
+                                pass
                             try:
                                 await save_user_name(session, user_id, cand)
                                 PendingNameCache.clear(user_id)
@@ -386,6 +405,17 @@ async def skill_endpoint(
                     except Exception:
                         pass
                     
+                    # AI 응답을 데이터베이스에 저장 (중복 저장 방지)
+                    try:
+                        if not str(conv.conv_id).startswith("temp_") and conv.conv_id:
+                            # 사용자 메시지 저장
+                            await save_message(session, conv.conv_id, "user", user_text_stripped, x_request_id, None, user_id)
+                            # AI 응답 저장
+                            await save_message(session, conv.conv_id, "assistant", ai_response, x_request_id, tokens_used, user_id)
+                            logger.info(f"\n[저장] 이름 변경 요청 대화 저장 완료: conv_id={conv.conv_id}")
+                    except Exception as save_err:
+                        logger.warning(f"\n[경고] 대화 저장 실패: {save_err}")
+                    
                     # AI 응답을 그대로 반환
                     return JSONResponse(content={
                         "version": "2.0",
@@ -393,6 +423,18 @@ async def skill_endpoint(
                     }, media_type="application/json; charset=utf-8")
                 else:
                     logger.info(f"\n[감지] 이름 요청 패턴 없음 - 일반 대화로 진행")
+                    
+                    # AI 응답을 데이터베이스에 저장 (중복 저장 방지)
+                    try:
+                        if not str(conv.conv_id).startswith("temp_") and conv.conv_id:
+                            # 사용자 메시지 저장
+                            await save_message(session, conv.conv_id, "user", user_text_stripped, x_request_id, None, user_id)
+                            # AI 응답 저장
+                            await save_message(session, conv.conv_id, "assistant", ai_response, x_request_id, tokens_used, user_id)
+                            logger.info(f"\n[저장] 일반 대화 저장 완료: conv_id={conv.conv_id}")
+                    except Exception as save_err:
+                        logger.warning(f"\n[경고] 대화 저장 실패: {save_err}")
+                    
                     # AI 응답을 그대로 반환
                     return JSONResponse(content={
                         "version": "2.0",
@@ -793,6 +835,12 @@ async def skill_endpoint(
         # 5) AI 답변
         try:
             logger.info(f"Generating AI response for: {user_text}")
+            
+            # LogMessage에도 저장
+            try:
+                await save_log_message(session, "INFO", f"AI 응답 생성 시작: {user_text[:100]}...", user_id, conv_id, "ai_generation")
+            except Exception:
+                pass
             try:
                 final_text, tokens_used = await asyncio.wait_for(
                     ai_service.generate_response(
@@ -808,6 +856,12 @@ async def skill_endpoint(
                 logger.warning("AI generation timeout. Falling back to canned message.")
                 final_text, tokens_used = ("답변 생성이 길어졌어요. 잠시만 기다려주세요.", 0)
             logger.info(f"AI response generated: {final_text[:50]}...")
+            
+            # LogMessage에도 저장
+            try:
+                await save_log_message(session, "INFO", f"AI 응답 생성 완료: {final_text[:100]}...", user_id, conv_id, "ai_generation")
+            except Exception:
+                pass
             try:
                 await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
@@ -873,6 +927,12 @@ async def skill_endpoint(
         
     except Exception as e:
         logger.exception(f"Error in skill endpoint: {e}")
+        
+        # LogMessage에도 저장
+        try:
+            await save_log_message(session, "ERROR", f"Error in skill endpoint: {e}", None, None, "error")
+        except Exception:
+            pass
         safe_text = "일시적인 오류가 발생했어요. 다시 한 번 시도해 주세요"
         return JSONResponse(content={
             "version": "2.0",
