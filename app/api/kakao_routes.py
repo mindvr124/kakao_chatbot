@@ -59,7 +59,7 @@ def extract_korean_name(text: str) -> str | None:
 
 def test_name_extraction(text: str) -> dict:
     """이름 추출 테스트용 함수"""
-    logger.info(f"[테스트] 이름 추출 테스트: '{text}'")
+    logger.info(f"\n[테스트] 이름 추출 테스트: '{text}'")
     
     # 패턴 제거 테스트
     text_after_prefix = _NAME_PREFIX_PATTERN.sub('', text)
@@ -86,9 +86,9 @@ def test_name_extraction(text: str) -> dict:
     
     # 핵심 결과만 간단하게 로깅
     if extracted_name:
-        logger.info(f"[성공] 이름 추출 성공: '{extracted_name}' -> '{cleaned_name}' (유효: {is_valid})")
+        logger.info(f"\n[성공] 이름 추출 성공: '{extracted_name}' -> '{cleaned_name}' (유효: {is_valid})")
     else:
-        logger.info(f"[실패] 이름 추출 실패: '{text}'")
+        logger.info(f"\n[실패] 이름 추출 실패: '{text}'")
     
     return result
     
@@ -117,7 +117,7 @@ class PendingNameCache:
     @classmethod
     def set_waiting(cls, user_id: str):
         cls._store[user_id] = time.time() + cls.TTL_SECONDS
-        logger.info(f"[대기] 이름 대기 상태 설정: {user_id}")
+        logger.info(f"\n[대기] 이름 대기 상태 설정: {user_id}")
 
     @classmethod
     def is_waiting(cls, user_id: str) -> bool:
@@ -137,18 +137,18 @@ class PendingNameCache:
         was_waiting = user_id in cls._store
         cls._store.pop(user_id, None)
         if was_waiting:
-            logger.info(f"[해제] 이름 대기 상태 해제: {user_id}")
+            logger.info(f"\n[해제] 이름 대기 상태 해제: {user_id}")
 
 async def save_user_name(session: AsyncSession, user_id: str, name: str):
     """appuser.user_name 저장/갱신 (INSERT 또는 UPDATE)"""
-    logger.info(f"[저장] 이름 저장 시도: {user_id} -> {name}")
+    logger.info(f"\n[저장] 이름 저장 시도: {user_id} -> {name}")
     
     # upsert_user는 사용자가 없으면 INSERT, 있으면 UPDATE를 수행
     user = await upsert_user(session, user_id, name)
     
     # 이미 commit이 되었으므로 추가 commit 불필요
     operation = 'INSERT' if not user.user_name else 'UPDATE'
-    logger.info(f"[완료] 이름 저장 완료: {user_id} -> {name} ({operation})")
+    logger.info(f"\n[완료] 이름 저장 완료: {user_id} -> {name} ({operation})")
     
     # 이름 변경 완료 로그 저장
     try:
@@ -162,12 +162,12 @@ async def save_user_name(session: AsyncSession, user_id: str, name: str):
         )
         
         if success:
-            logger.info(f"[로그] 이름 변경 로그 저장 완료: {user_id}")
+            logger.info(f"\n[로그] 이름 변경 로그 저장 완료: {user_id}")
         else:
-            logger.warning(f"[경고] 이름 변경 로그 저장 실패: {user_id}")
+            logger.warning(f"\n[경고] 이름 변경 로그 저장 실패: {user_id}")
             
     except Exception as e:
-        logger.error(f"[오류] 이름 변경 로그 저장 중 오류: {e}")
+        logger.error(f"\n[오류] 이름 변경 로그 저장 중 오류: {e}")
 
 def kakao_text(text: str) -> JSONResponse:
     return JSONResponse(
@@ -237,13 +237,13 @@ async def skill_endpoint(
             user_name = user.user_name if user else None
             is_waiting = PendingNameCache.is_waiting(user_id)
             
-            logger.info(f"[상태] 사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}")
-            logger.info(f"[입력] 사용자 입력: '{user_text_stripped}'")
+            logger.info(f"\n[상태] 사용자 상태: {user_id} | 이름: {user_name} | 대기중: {is_waiting}")
+            logger.info(f"\n[입력] 사용자 입력: '{user_text_stripped}'")
             
             if user is None or user.user_name is None:
                 # 이름을 기다리는 중이었다면 이름 저장 시도
                 if PendingNameCache.is_waiting(user_id):
-                    logger.info(f"[처리] 이름 입력 처리 중: '{user_text_stripped}'")
+                    logger.info(f"\n[처리] 이름 입력 처리 중: '{user_text_stripped}'")
                     
                     # 이름 추출 테스트 실행
                     test_result = test_name_extraction(user_text_stripped)
@@ -252,7 +252,7 @@ async def skill_endpoint(
                     if name:
                         cand = test_result['cleaned_name']
                         if test_result['is_valid']:
-                            logger.info(f"[검증] 이름 검증 통과: '{cand}', 저장 시작...")
+                            logger.info(f"\n[검증] 이름 검증 통과: '{cand}', 저장 시작...")
                             try:
                                 await save_user_name(session, user_id, cand)
                                 PendingNameCache.clear(user_id)
@@ -268,12 +268,12 @@ async def skill_endpoint(
                             logger.warning(f"[형식] 이름 형식 오류: '{cand}'")
                             return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
                     else:
-                        logger.info(f"[추출] 이름 추출 실패: '{user_text_stripped}'")
+                        logger.info(f"\n[추출] 이름 추출 실패: '{user_text_stripped}'")
                         return kakao_text("불리고 싶은 이름을 알려줘! 그럼 나온이가 꼭 기억할게~")
                 
                 # 인삿말이 오면 웰컴 메시지로 응답
                 elif any(greeting in user_text_stripped.lower() for greeting in _GREETINGS):
-                    logger.info(f"[인사] 인삿말 감지: '{user_text_stripped}' -> 이름 대기 상태 설정")
+                    logger.info(f"\n[인사] 인삿말 감지: '{user_text_stripped}' -> 이름 대기 상태 설정")
                     PendingNameCache.set_waiting(user_id)
                     try:
                         await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
@@ -282,7 +282,7 @@ async def skill_endpoint(
                     return kakao_text(random.choice(_WELCOME_MESSAGES))
                 else:
                     # 이름을 물어보는 메시지 전송
-                    logger.info(f"[질문] 인삿말 아님: '{user_text_stripped}' -> 이름 대기 상태 설정")
+                    logger.info(f"\n[질문] 인삿말 아님: '{user_text_stripped}' -> 이름 대기 상태 설정")
                     PendingNameCache.set_waiting(user_id)
                     try:
                         await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
@@ -301,6 +301,15 @@ async def skill_endpoint(
             except Exception:
                 pass
             return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
+        
+        # 2-1.5) 기존 사용자가 이름 변경을 원할 때 → 이름 대기 상태 설정
+        if user and user.user_name and user_text_stripped in ["이름 바꿔", "이름 변경", "다른 이름", "이름 바꾸고 싶어", "내 이름 그거 아"]:
+            PendingNameCache.set_waiting(user_id)
+            try:
+                await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": user.user_name})
+            except Exception:
+                pass
+            return kakao_text(f"현재 '{user.user_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
 
         # 2-2) '/이름 xxx' 형태 → 즉시 저장 시도
         if user_text_stripped.startswith("/이름 "):
@@ -329,19 +338,20 @@ async def skill_endpoint(
                 except Exception:
                     pass
                 return kakao_text("좋아, 다음에 다시 알려줘!")
-
+            
+            # 이름 변경 처리 (기존 사용자 + 새 사용자 모두)
             cand = clean_name(user_text_stripped)
             if not is_valid_name(cand):
                 return kakao_text("이름 형식은 한글/영문 1~20자로 입력해줘!\n예) 민수, Yeonwoo")
-
+            
             try:
                 await save_user_name(session, user_id, cand)
                 PendingNameCache.clear(user_id)
                 try:
-                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "followup"})
+                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "name_change"})
                 except Exception:
                     pass
-                return kakao_text(f"이름 예쁘다! 앞으로는 {cand}(이)라고 불러줄게~")
+                return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
             except Exception as name_err:
                 logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")

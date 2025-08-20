@@ -25,22 +25,22 @@ async def upsert_user(session: AsyncSession, user_id: str, user_name: str | None
         user = await session.get(AppUser, user_id)
         if not user:
             # 새 사용자 생성 (INSERT)
-            logger.info(f"[생성] 새 사용자 생성: {user_id} | 이름: {user_name}")
+            logger.info(f"\n[생성] 새 사용자 생성: {user_id} | 이름: {user_name}")
             user = AppUser(user_id=user_id, user_name=user_name)
             session.add(user)
             try:
                 await session.commit()
-                logger.info(f"[완료] 새 사용자 생성 완료: {user_id}")
+                logger.info(f"\n[완료] 새 사용자 생성 완료: {user_id}")
             except Exception:
                 await session.rollback()
                 raise
             await session.refresh(user)
         elif user_name is not None:  # 이름이 제공되면 업데이트 (UPDATE)
-            logger.info(f"[변경] 사용자 이름 변경: {user_id} | '{user.user_name}' -> '{user_name}'")
+            logger.info(f"\n[변경] 사용자 이름 변경: {user_id} | '{user.user_name}' -> '{user_name}'")
             user.user_name = user_name
             try:
                 await session.commit()
-                logger.info(f"[완료] 사용자 이름 변경 완료: {user_id} -> {user_name}")
+                logger.info(f"\n[완료] 사용자 이름 변경 완료: {user_id} -> {user_name}")
             except Exception:
                 await session.rollback()
                 raise
