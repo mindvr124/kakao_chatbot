@@ -359,18 +359,17 @@ async def skill_endpoint(
                 logger.info(f"\n[AI생성] AI 응답 생성: {ai_response[:100]}...")
                 
                 # AI 응답에서 이름 요청 패턴 확인
-                name_request_patterns = ["불리고 싶은", "뭐라고", "이름이 뭐", "이름 알려줘"]
+                name_request_patterns = ["불리고 싶은", "뭐라고 부르면", "이름이 뭐", "이름 알려줘"]
                 matched_patterns = [pattern for pattern in name_request_patterns if pattern in ai_response]
                 
                 if matched_patterns:
                     logger.info(f"\n[감지] 이름 요청 패턴 발견: {matched_patterns}")
                     
-                    # commit 전에 user_name 값을 미리 복사 (expire_on_commit 방지)
-                    current_name = user.user_name
+                    # 이름 대기 상태 설정 - 다음 사용자 입력을 이름으로 받기
                     PendingNameCache.set_waiting(user_id)
                     try:
                         await save_event_log(session, "name_change_request", user_id, None, x_request_id, {
-                            "current_name": current_name, 
+                            "current_name": user.user_name, 
                             "trigger": "ai_name_request",
                             "matched_patterns": matched_patterns,
                             "ai_response": ai_response[:200]
@@ -378,9 +377,11 @@ async def skill_endpoint(
                     except Exception:
                         pass
                     
-                    # 이름 변경 모드로 전환 - 다음 사용자 입력을 기다림
-                    logger.info(f"\n[전환] 이름 변경 모드로 전환됨: {user_id}")
-                    return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
+                    # AI 응답을 그대로 반환
+                    return JSONResponse(content={
+                        "version": "2.0",
+                        "template": {"outputs":[{"simpleText":{"text": ai_response}}]}
+                    }, media_type="application/json; charset=utf-8")
                 else:
                     logger.info(f"\n[감지] 이름 요청 패턴 없음 - 일반 대화로 진행")
                     # AI 응답을 그대로 반환
