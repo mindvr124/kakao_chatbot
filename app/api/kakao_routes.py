@@ -2,7 +2,9 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
+from collections import defaultdict
 
+from app.risk_mvp import RiskWindow, evaluate_turn
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log, save_log_message
@@ -187,6 +189,18 @@ def kakao_text(text: str) -> JSONResponse:
         media_type="application/json; charset=utf-8"
     )
 
+_RISK_WINDOWS = defaultdict(RiskWindow)
+
+def _safe_reply_kakao(band:str) -> dict:
+    # 카카오 simpleText 응답 생성 (문구는 원하는 톤으로 바꿔도 됨)
+    msg = (
+        "지금 마음이 많이 힘들어 보여. 혼자가 아니야.\n"
+        "• 자살예방 상담전화 1393 (24시간)\n"
+        "• 정신건강 위기상담 1577-0199\n"
+        "긴급한 상황이면 112/119에 바로 연락해줘."
+    )
+    return {"version":"2.0","template":{"outputs":[{"simpleText":{"text": msg}}]}}
+    
 # ====== [스킬 엔드포인트] =====================================================
 
 @router.post("/skill")
@@ -244,6 +258,21 @@ async def skill_endpoint(
         if not user_text:
             user_text = "안녕하세요"
         user_text_stripped = user_text.strip()
+
+        win = _RISK_WINDOWS[user_id]   # 사용자별 최근 20턴 상태
+        band, score, rlog = evaluate_turn(win, user_text_stripped)
+        logger.info(f"[RISK] user={user_id} band={band} score={score} flags={rlog['flags']} axes={rlog['axes']}")
+
+        # 고위험은 즉시 안전 응답 (이름/AI생성/콜백 등 모든 후속 로직을 건너뜀)
+        if rlog["override"] or band in ("high","imminent"):
+            try:
+                await save_event_log(session, "risk_trigger",
+                                    user_id, None,
+                                    x_request_id,
+                                    {"band": band, "score": score, "evidence": rlog["evidence"][:3]})
+            except Exception:
+                pass
+            return JSONResponse(content=_safe_reply_kakao(band), media_type="application/json; charset=utf-8")
 
         # ====== [이름 없는 사용자 처리] ==================================
         # AppUser 테이블에서 사용자 이름 확인
