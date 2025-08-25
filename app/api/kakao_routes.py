@@ -232,7 +232,7 @@ async def handle_name_flow(
                             await save_user_name(session, user_id, cand)
                             PendingNameCache.clear(user_id)
                             try:
-                                await save_log_message(session, "name_saved", user_id, None, x_request_id, f"name_{cand}_mode_first_chat")
+                                await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
                             except Exception:
                                 pass
                             return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
@@ -305,7 +305,7 @@ async def handle_name_flow(
                 await save_user_name(session, user_id, cand)
                 PendingNameCache.clear(user_id)
                 try:
-                    await save_log_message(session, "name_saved", user_id, None, x_request_id, f"name_{cand}_mode_ai_name_request")
+                    await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "ai_name_request"})
                 except Exception:
                     pass
                 return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
@@ -401,7 +401,7 @@ async def handle_name_flow(
                 current_name = user.user_name
                 PendingNameCache.set_waiting(user_id)
                 try:
-                    await save_log_message(session, "name_change_request", user_id, None, x_request_id, f"current_name_{current_name}_trigger_explicit_request")
+                    await save_log_message(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name, "trigger": "explicit_request"})
                 except Exception:
                     pass
                 return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
@@ -446,7 +446,7 @@ async def handle_name_flow(
             try:
                 await save_user_name(session, user_id, cand)
                 try:
-                    await save_log_message(session, "name_saved", user_id, None, x_request_id, f"name_{cand}_mode_slash_inline")
+                    await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "slash_inline"})
                 except Exception:
                     pass
                 return kakao_text(f"예쁜 이름이다! 앞으로는 {cand}(이)라고 불러줄게~")
@@ -676,7 +676,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_log_message(session, "request_received", user_id, None, x_request_id, "callback")
+                    await save_log_message(session, "request_received", user_id, None, x_request_id, {"callback": True})
                 except Exception:
                     pass
 
@@ -933,7 +933,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                             )
                             await save_message(s, conv_id_value, "assistant", final_text, trace_id, tokens_used, user_id)
                             try:
-                                await save_log_message(s, "callback_final_sent", user_id, conv_id_value, request_id, f"tokens_{tokens_used}")
+                                await save_log_message(s, "callback_final_sent", user_id, conv_id_value, request_id, {"tokens": tokens_used})
                             except Exception:
                                 pass
                             try:
@@ -1010,7 +1010,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
 
             try:
-                await save_log_message(session, "message_generated", user_id, conv_id, x_request_id, f"tokens_{tokens_used}")
+                await save_log_message(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
                 pass
             

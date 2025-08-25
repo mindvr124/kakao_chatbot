@@ -70,9 +70,9 @@ class LogMessage(SQLModel, table=True):
     log_id: UUID = Field(default_factory=uuid4, primary_key=True)
     level: str = Field(index=True)  # INFO, WARNING, ERROR, DEBUG
     message: str
-    user_id: str | None = Field(default=None, index=True)
+    user_id: str | None = Field(default=None, index=True)  # str 타입으로 통일
     conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
-    source: str | None = None  # 어느 모듈에서 발생한 로그인지
+    source: Any | None = Field(default=None, sa_column=JSON)  # JSONB로 변경하여 딕셔너리/리스트 저장 가능
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
 class UserSummary(SQLModel, table=True):
@@ -82,7 +82,7 @@ class UserSummary(SQLModel, table=True):
     last_message_created_at: Optional[datetime] = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-class RiskState(SQLModel, table=True):
+class RiskState(SQLModel, table=True, table_name="riskstate"):
     """사용자별 자살위험도 상태 테이블"""
     user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
     score: int = Field(default=0)  # 현재 위험도 점수 (0-100)

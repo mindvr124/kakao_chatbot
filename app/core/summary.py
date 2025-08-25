@@ -168,7 +168,7 @@ async def maybe_rollup_user_summary(
     if new_count < MAX_TURNS:
         # 이벤트 로그(스킵)
         try:
-            await save_log_message(session, "summary_rollup_skipped", user_id, None, None, f"summary_rollup_skipped_new_{new_count}_need_{MAX_TURNS}")
+            await save_log_message(session, "summary_rollup_skipped", user_id, None, None, {"new_count": new_count, "need": MAX_TURNS})
         except Exception:
             pass
         return

@@ -65,7 +65,7 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
                     user_id=user_id,
                 )
                 try:
-                    await save_log_message(session, "message_saved_user", user_id, conv_id, request_id, f"content_len_{len(user_text)}")
+                    await save_log_message(session, "message_saved_user", user_id, conv_id, request_id, {"content_len": len(user_text)})
                 except Exception:
                     pass
             except Exception:
@@ -134,7 +134,7 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     user_id=user_id,
                 )
                 try:
-                    await save_log_message(session, "message_saved_assistant", user_id, conv_id, request_id, f"tokens_{tokens_used}")
+                    await save_log_message(session, "message_saved_assistant", user_id, conv_id, request_id, {"tokens": tokens_used})
                 except Exception:
                     pass
             except Exception:
@@ -364,7 +364,7 @@ async def _summarize_and_close(conv_id: str):
                 try:
                     await upsert_user_summary_from_text(session, user_id, summary_text)
                     try:
-                        await save_log_message(session, "summary_saved", user_id, conv_uuid, None, f"len_{len(summary_text or '')}")
+                        await save_log_message(session, "summary_saved", user_id, conv_uuid, None, {"len": len(summary_text or "")})
                     except Exception:
                         pass
                 except Exception as err:
@@ -372,12 +372,12 @@ async def _summarize_and_close(conv_id: str):
                         await session.rollback()
                         await upsert_user_summary_from_text(session, user_id, summary_text)
                         try:
-                            await save_log_message(session, "summary_saved", user_id, conv_uuid, None, f"len_{len(summary_text or '')}_after_rollback")
+                            await save_log_message(session, "summary_saved", user_id, conv_uuid, None, {"len": len(summary_text or ""), "after_rollback": True})
                         except Exception:
                             pass
                     except Exception:
                         try:
-                            await save_log_message(session, "summary_failed", user_id, conv_uuid, None, f"error_{str(err)[:300]}")
+                            await save_log_message(session, "summary_failed", user_id, conv_uuid, None, {"error": str(err)[:300]})
                         except Exception:
                             pass
                         raise
@@ -385,7 +385,7 @@ async def _summarize_and_close(conv_id: str):
             except Exception as e:
                 logger.warning(f"2분 요약 저장 실패: {e}")
                 try:
-                    await save_log_message(session, "summary_failed", user_id, conv_uuid, None, f"error_{str(e)[:300]}")
+                    await save_log_message(session, "summary_failed", user_id, conv_uuid, None, {"error": str(e)[:300]})
                 except Exception:
                     pass
             # 10개 롤업도 병행 시도 (중복 시 최신것 사용)
