@@ -662,6 +662,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as e:
                         logger.warning(f"[CHECK] 점수 초기화 실패: {e}")
                     
+                    # 체크 질문 응답 완료 후 turn_count 리셋
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
+                    
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
                 
                 # 7-8점: 안전 안내 메시지
@@ -675,6 +679,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                             {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
                     except Exception:
                         pass
+                    
+                    # 체크 질문 응답 완료 후 turn_count 리셋
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
+                    
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
                     return kakao_text(response_message)
@@ -690,6 +699,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                             {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
                     except Exception:
                         pass
+                    
+                    # 체크 질문 응답 완료 후 turn_count 리셋
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
                     
             except Exception as e:
                 logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
@@ -738,7 +751,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 import traceback
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
         elif check_score is None:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}, should_send={should_send_check_question(cumulative_score, user_risk_history)}")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}")
+            logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(cumulative_score, user_risk_history)}")
+            logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
+            logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
 
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
