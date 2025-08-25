@@ -24,6 +24,11 @@ class LogLevel(str, pyenum.Enum):
     ERROR = "ERROR"
     DEBUG = "DEBUG"
 
+class LogSource(str, pyenum.Enum):
+    CALLBACK = "callback"
+    WORKER = "worker"
+    APP = "app"
+
 
 
 class AppUser(SQLModel, table=True):
@@ -43,8 +48,8 @@ class Message(SQLModel, table=True):
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
     user_id: str = Field(default=None, foreign_key="appuser.user_id", index=True)
     role: MessageRole = Field(
-        sa_column=Column(SAEnum(MessageRole, name="message_role", native_enum=False)),
-        default=MessageRole.USER
+        default=MessageRole.USER,
+        sa_column=Column(SAEnum(MessageRole, name="message_role", native_enum=False))
     )
     content: str
     tokens: int = Field(default=None)
@@ -81,13 +86,16 @@ class LogMessage(SQLModel, table=True):
     """로그 메시지 저장 테이블"""
     log_id: UUID = Field(default_factory=uuid4, primary_key=True)
     level: LogLevel = Field(
-        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False)),
-        default=LogLevel.INFO
+        default=LogLevel.INFO,
+        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False))
     )
     message: str
     user_id: str = Field(default=None, index=True)  # str 타입으로 통일
     conv_id: UUID = Field(default=None, foreign_key="conversation.conv_id", index=True)
-    source: Any = Field(default=None, sa_column=JSONB)  # JSONB로 변경하여 딕셔너리/리스트 저장 가능
+    source: LogSource = Field(
+        default=None,
+        sa_column=Column(SAEnum(LogSource, name="log_source", native_enum=False), nullable=True)
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
 class UserSummary(SQLModel, table=True):
