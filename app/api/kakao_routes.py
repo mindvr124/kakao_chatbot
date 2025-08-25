@@ -233,7 +233,7 @@ async def handle_name_flow(
                             await save_user_name(session, user_id, cand)
                             PendingNameCache.clear(user_id)
                             try:
-                                await save_log_message(session, "name_saved", user_id, conv_id, x_request_id, {"name": cand, "mode": "first_chat"})
+                                await save_log_message(session, "name_saved", str(user_id), conv_id, x_request_id, {"source": "name_flow", "name": cand, "mode": "first_chat"})
                             except Exception:
                                 pass
                             return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
@@ -517,7 +517,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # LogMessage에도 저장
         try:
-            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), None, "skill_endpoint")
+            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), None, {"source": "skill_endpoint"})
         except Exception:
             pass
 
@@ -612,7 +612,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_critical",
                                             str(user_id), conv_id,
                                             x_request_id,
-                                            {"check_score": check_score, "guidance": guidance})
+                                            {"source": "check_response", "check_score": check_score, "guidance": guidance})
                     except Exception:
                         pass
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
@@ -624,7 +624,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_high_risk",
                                             str(user_id), conv_id,
                                             x_request_id,
-                                            {"check_score": check_score, "guidance": guidance})
+                                            {"source": "check_response", "check_score": check_score, "guidance": guidance})
                     except Exception:
                         pass
                     response_message = get_check_response_message(check_score)
@@ -638,7 +638,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_normal",
                                             str(user_id), conv_id,
                                             x_request_id,
-                                            {"check_score": check_score, "guidance": guidance})
+                                            {"source": "check_response", "check_score": check_score, "guidance": guidance})
                     except Exception:
                         pass
                     # 체크 응답에 대한 대응 메시지를 보내고 정상 대화로 진행
@@ -660,7 +660,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 await save_log_message(session, "risk_trigger",
                                     str(user_id), conv_id,
                                     x_request_id,
-                                    {"level": risk_level, "score": risk_score, "evidence": evidence[:3]})
+                                    {"source": "risk_analysis", "level": risk_level, "score": risk_score, "evidence": evidence[:3]})
             except Exception:
                 pass
 
@@ -703,7 +703,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_log_message(session, "request_received", str(user_id), conv_id, x_request_id, {"callback": True})
+                    await save_log_message(session, "request_received", str(user_id), conv_id, x_request_id, {"source": "callback", "callback": True})
                 except Exception:
                     pass
 
@@ -775,7 +775,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 "useCallback": True
             }
             try:
-                await save_log_message(session, "callback_waiting_sent", str(user_id), conv_id, x_request_id, None)
+                await save_log_message(session, "callback_waiting_sent", str(user_id), conv_id, x_request_id, {"source": "callback"})
             except Exception:
                 pass
 
@@ -1037,7 +1037,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
 
             try:
-                await save_log_message(session, "message_generated", str(user_id), conv_id, x_request_id, {"tokens": tokens_used})
+                await save_log_message(session, "message_generated", str(user_id), conv_id, x_request_id, {"source": "ai_generation", "tokens": tokens_used})
             except Exception:
                 pass
             
@@ -1104,7 +1104,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # LogMessage에도 저장
         try:
-            await save_log_message(session, "ERROR", f"Error in skill endpoint: {e}", None, None, "error")
+            await save_log_message(session, "ERROR", f"Error in skill endpoint: {e}", None, None, {"source": "error"})
         except Exception:
             pass
         safe_text = "일시적인 오류가 발생했어요. 다시 한 번 시도해 주세요"
