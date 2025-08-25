@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, RiskState
 from app.utils.utils import session_expired
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Any
 from uuid import UUID
 from loguru import logger
 from zoneinfo import ZoneInfo
