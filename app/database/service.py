@@ -102,28 +102,33 @@ async def save_message(
     user_id: str | None = None,
 ) -> Message:
     try:
+        # temp_로 시작하는 conv_id는 처리하지 않음
+        if conv_id and str(conv_id).startswith("temp_"):
+            logger.warning(f"[SAVE_MESSAGE] Skipping temp conv_id: {conv_id}")
+            raise ValueError(f"Cannot save message for temporary conversation: {conv_id}")
+        
+        # conv_id를 UUID로 변환
+        from uuid import UUID
+        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+        
         # user_id가 비었으면 conv_id로 보강 시도
         if not user_id:
             try:
-                from uuid import UUID
                 from app.database.models import Conversation as DBConversation
-                conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
                 conv_obj = await session.get(DBConversation, conv_uuid)
                 if conv_obj and conv_obj.user_id:
                     user_id = conv_obj.user_id
             except Exception:
                 try:
                     await session.rollback()
-                    from uuid import UUID
-                    from app.database.models import Conversation as DBConversation
-                    conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
                     conv_obj = await session.get(DBConversation, conv_uuid)
                     if conv_obj and conv_obj.user_id:
                         user_id = conv_obj.user_id
                 except Exception:
                     pass
+        
         msg = Message(
-            conv_id=conv_id,
+            conv_id=conv_uuid,  # UUID로 변환된 값 사용
             user_id=user_id,
             role=role,
             content=content,
@@ -158,11 +163,9 @@ async def save_prompt_log(
     """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
         from uuid import UUID
-        conv_uuid = None
-        try:
-            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
-        except Exception:
-            conv_uuid = None
+        # conv_id를 UUID로 변환
+        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
+        
         log = PromptLog(
             conv_id=conv_uuid,
             model=model,

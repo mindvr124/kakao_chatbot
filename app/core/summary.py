@@ -5,19 +5,23 @@ from loguru import logger
 
 from app.database.models import Message, Conversation, UserSummary
 from app.database.service import save_event_log
+from app.database.models import Conversation as DBConversation
 
 class SummaryResponse:
     def __init__(self, content: str):
         self.content = content
 
-def _build_summary_prompt(history: str, summary_text: str) -> list[dict]:
+def _build_summary_prompt(history: str, summary_text: str, user_name: str) -> list[dict]:
     instruction = (
-        """다음은 현재 진행중인 상담의 대화 기록입니다. 다음 조건을 지켜주세요.
+        f"""다음은 현재 진행중인 상담의 대화 기록입니다. 다음 조건을 지켜주세요.
+        내담자의 이름은 {user_name}입니다.
         1. 내담자의 현재 심리 상태, 상담 이유와 그에 관련된 핵심 내용을 사실에 기반하여 중복이 없도록 요약해 주세요.
         2. 이전 요약 대화에서 중요한 내용은 삭제하지 말고 덧붙여서 요약해 주세요.
         3. 대화 주제가 많이 변경된 경우, 오래된 요약이 현재처럼 보이지 않도록 수정해 주세요.
         4. 이전 요약에 비교해서 현재 사용자의 심리 상태가 변화했는지 체크해 주세요.
-        5. 무의미한 대화나 인사만 있는 경우 요약하지 마세요."""
+        5. 무의미한 대화나 인사만 있는 경우 요약하지 마세요.
+        6. 내담자의 이름은 요약에 저장하지 마세요. 요약 안에 내담자의 이름이 있다면 삭제해 주세요.
+        7. 내담자의 이름을 제외한 이름 혹은 명칭은 요약에 포함해 주세요."""
     )
     user_content = (
         f"[이전 요약]\n{summary_text or ''}\n\n[대화]\n{history}"
@@ -27,10 +31,10 @@ def _build_summary_prompt(history: str, summary_text: str) -> list[dict]:
         {"role": "user", "content": f"{instruction}\n\n{user_content}"},
     ]
 
-async def generate_summary(llm_or_client, history: str, summary_text: str) -> SummaryResponse:
+async def generate_summary(llm_or_client, history: str, summary_text: str, user_name: str = "사용자") -> SummaryResponse:
     try:
         # AsyncOpenAI / OpenAI 모두 지원하도록
-        messages = _build_summary_prompt(history, summary_text)
+        messages = _build_summary_prompt(history, summary_text, user_name)
         # 동기/비동기 클라이언트 분기 처리
         create_fn = getattr(getattr(llm_or_client, "chat", None), "completions", None)
         if create_fn is None:
@@ -73,7 +77,6 @@ async def generate_summary(llm_or_client, history: str, summary_text: str) -> Su
 async def load_user_full_history(session: AsyncSession, user_id: str) -> str:
     if not user_id:
         return ""
-    from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
         .join(DBConversation, Message.conv_id == DBConversation.conv_id)

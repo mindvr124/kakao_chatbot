@@ -3,6 +3,7 @@ import re
 from typing import Dict, List, Tuple, Optional
 from collections import deque
 from datetime import datetime, timedelta
+from loguru import logger
 
 # 점수별 정규식 패턴 정의
 RISK_PATTERNS = {
@@ -283,13 +284,25 @@ def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""
     import re
     
+    logger.info(f"[PARSE_DEBUG] 체크 응답 파싱 시작: text='{text}'")
+    
     # 숫자만 추출 (0-10 범위)
     numbers = re.findall(r'\b([0-9]|10)\b', text)
+    logger.info(f"[PARSE_DEBUG] 정규식 매칭 결과: {numbers}")
+    
     if numbers:
         score = int(numbers[0])
+        logger.info(f"[PARSE_DEBUG] 추출된 점수: {score}")
+        
         if 0 <= score <= 10:
+            logger.info(f"[PARSE_DEBUG] 유효한 점수 확인: {score}")
             return score
+        else:
+            logger.info(f"[PARSE_DEBUG] 점수 범위 초과: {score} (0-10 범위 아님)")
+    else:
+        logger.info(f"[PARSE_DEBUG] 숫자를 찾을 수 없음")
     
+    logger.info(f"[PARSE_DEBUG] 파싱 실패: None 반환")
     return None
 
 def get_risk_level(score: int) -> str:

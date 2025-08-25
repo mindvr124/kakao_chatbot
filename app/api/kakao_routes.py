@@ -560,10 +560,13 @@ async def skill_endpoint(
         
         # 체크 질문 응답인지 확인
         check_score = parse_check_response(user_text_stripped)
+        logger.info(f"[CHECK_DEBUG] 체크 응답 파싱 결과: text='{user_text_stripped}', score={check_score}")
+        
         if check_score is not None:
+            logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
             try:
                 await update_check_response(session, user_id, check_score)
-                logger.info(f"[CHECK] 사용자 체크 응답: {check_score}")
+                logger.info(f"[CHECK] 체크 응답 저장 완료: {check_score}점")
                 
                 # 체크 응답 점수에 따른 대응
                 guidance = get_check_response_guidance(check_score)
@@ -571,6 +574,7 @@ async def skill_endpoint(
                 
                 # 9-10점: 즉시 안전 응답
                 if check_score >= 9:
+                    logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
                     try:
                         await save_event_log(session, "check_response_critical",
                                             user_id, None,
@@ -582,6 +586,7 @@ async def skill_endpoint(
                 
                 # 7-8점: 안전 안내 메시지
                 elif check_score >= 7:
+                    logger.info(f"[CHECK] 위험도 7-8점: 안전 안내 메시지 발송")
                     try:
                         await save_event_log(session, "check_response_high_risk",
                                             user_id, None,
@@ -590,10 +595,12 @@ async def skill_endpoint(
                     except Exception:
                         pass
                     response_message = get_check_response_message(check_score)
+                    logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
                     return JSONResponse(content=kakao_text(response_message), media_type="application/json; charset=utf-8")
                 
                 # 0-6점: 일반 대응 메시지 후 정상 대화 진행
                 else:
+                    logger.info(f"[CHECK] 위험도 0-6점: 일반 대응 메시지 발송")
                     try:
                         await save_event_log(session, "check_response_normal",
                                             user_id, None,
@@ -603,12 +610,16 @@ async def skill_endpoint(
                         pass
                     # 체크 응답에 대한 대응 메시지를 보내고 정상 대화로 진행
                     response_message = get_check_response_message(check_score)
-                    logger.info(f"[CHECK] 대응 메시지: {response_message}")
+                    logger.info(f"[CHECK] 0-6점 응답 메시지: {response_message}")
                     # 체크 응답 대응 메시지 전송
                     return JSONResponse(content=kakao_text(response_message), media_type="application/json; charset=utf-8")
                     
             except Exception as e:
-                logger.warning(f"체크 응답 저장 실패: {e}")
+                logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
+                import traceback
+                logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
+        else:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
 
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
@@ -622,19 +633,29 @@ async def skill_endpoint(
             return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
         
         # 8점 이상이면 체크 질문 발송
+        logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 확인: risk_score={risk_score}, should_send={should_send_check_question(risk_score, user_risk_history)}")
+        
         if should_send_check_question(risk_score, user_risk_history):
+            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: risk_score={risk_score}")
             try:
                 # RiskHistory에 체크 질문 발송 기록
                 user_risk_history.mark_check_question_sent()
+                logger.info(f"[CHECK] RiskHistory에 체크 질문 발송 기록 완료")
+                
                 # 데이터베이스에도 기록
                 await mark_check_question_sent(session, user_id)
+                logger.info(f"[CHECK] 데이터베이스에 체크 질문 발송 기록 완료")
                 
                 check_questions = get_check_questions()
                 selected_question = random.choice(check_questions)
                 logger.info(f"[CHECK] 체크 질문 발송: {selected_question}")
                 return JSONResponse(content=kakao_text(selected_question), media_type="application/json; charset=utf-8")
             except Exception as e:
-                logger.warning(f"체크 질문 발송 실패: {e}")
+                logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
+                import traceback
+                logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
+        else:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: risk_score={risk_score}")
 
         # 이름 관련 플로우 처리
         name_response = await handle_name_flow(session, user_id, user_text_stripped, x_request_id)

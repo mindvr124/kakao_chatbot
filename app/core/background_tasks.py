@@ -28,6 +28,16 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
     try:
         logger.bind(x_request_id=request_id).info(f"Saving user message to DB in background")
         
+        # conv_id 유효성 검사
+        if not conv_id:
+            logger.bind(x_request_id=request_id).error(f"conv_id is empty or None: {conv_id}")
+            return
+        
+        # temp_로 시작하는 conv_id는 처리하지 않음
+        if str(conv_id).startswith("temp_"):
+            logger.bind(x_request_id=request_id).info(f"Skipping temp conv_id: {conv_id}")
+            return
+        
         # 새로운 세션으로 DB 저장
         async for session in get_session():
             # user_id가 없으면 conv에서 조회 시도
@@ -86,6 +96,16 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
     """백그라운드에서 AI 답변을 DB에 저장합니다."""
     try:
         logger.bind(x_request_id=request_id).info(f"Saving AI response to DB in background")
+        
+        # conv_id 유효성 검사
+        if not conv_id:
+            logger.bind(x_request_id=request_id).error(f"conv_id is empty or None: {conv_id}")
+            return
+        
+        # temp_로 시작하는 conv_id는 처리하지 않음
+        if str(conv_id).startswith("temp_"):
+            logger.bind(x_request_id=request_id).info(f"Skipping temp conv_id: {conv_id}")
+            return
         
         # 새로운 세션으로 DB 저장
         async for session in get_session():
@@ -332,7 +352,16 @@ async def _summarize_and_close(conv_id: str):
                     except Exception:
                         prev_summary = ""
                 history_text = await load_user_full_history(session, user_id)
-                resp = await generate_summary(ai_service.client, history_text, prev_summary)
+                
+                # 사용자 이름 가져오기
+                try:
+                    from app.database.models import AppUser
+                    user = await session.get(AppUser, user_id)
+                    user_name = user.user_name if user and user.user_name else "사용자"
+                except Exception:
+                    user_name = "사용자"
+                
+                resp = await generate_summary(ai_service.client, history_text, prev_summary, user_name)
                 summary_text = resp.content or prev_summary
                 try:
                     await upsert_user_summary_from_text(session, user_id, summary_text)
