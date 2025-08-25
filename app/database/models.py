@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from uuid import uuid4, UUID
 from enum import Enum
+from sqlalchemy import JSON
 
 class MessageRole(str, Enum):
     USER = "user"
@@ -81,7 +82,7 @@ class EventLog(SQLModel, table=True):
     user_id: Optional[str] = Field(default=None, foreign_key="appuser.user_id", index=True)
     conv_id: Optional[UUID] = Field(default=None, foreign_key="conversation.conv_id", index=True)
     request_id: Optional[str] = Field(default=None, index=True)
-    details_json: Optional[dict] = Field(default=None, sa_column_kwargs={"type_": "jsonb"})
+    details_json: Optional[dict] = Field(default=None, sa_column_kwargs={"type_": JSON})
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
 class UserSummary(SQLModel, table=True):
