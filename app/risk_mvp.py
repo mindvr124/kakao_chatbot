@@ -55,8 +55,12 @@ class RiskHistory:
             'evidence': turn_analysis['evidence']
         }
         
+        logger.info(f"[RISK_HISTORY] 턴 추가: text='{text[:30]}...', score={turn_analysis['score']}, turns_before={len(self.turns)}")
+        
         self.turns.append(turn_data)
         self.last_updated = timestamp
+        
+        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, total_score={self.get_cumulative_score()}")
         
         # 체크 질문 발동 후 턴 카운트 증가
         if self.check_question_turn_count > 0:
@@ -67,10 +71,13 @@ class RiskHistory:
     def get_cumulative_score(self) -> int:
         """최근 턴들의 누적 위험도 점수를 계산합니다."""
         if not self.turns:
+            logger.info(f"[RISK_HISTORY] 누적 점수 계산: 턴이 없음 -> 0")
             return 0
         
         total_score = 0
         current_time = datetime.now()
+        
+        logger.info(f"[RISK_HISTORY] 누적 점수 계산 시작: turns_count={len(self.turns)}")
         
         for i, turn in enumerate(self.turns):
             # 최신 턴일수록 높은 가중치 (시간 감쇠)
@@ -82,8 +89,12 @@ class RiskHistory:
             
             weighted_score = int(turn['score'] * decay * recency_weight)
             total_score += weighted_score
+            
+            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, recency_weight={recency_weight:.3f}, weighted_score={weighted_score}")
         
-        return min(100, total_score)
+        final_score = min(100, total_score)
+        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}")
+        return final_score
     
     def get_risk_trend(self) -> str:
         """위험도 변화 추세를 분석합니다."""

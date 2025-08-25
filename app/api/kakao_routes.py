@@ -3,7 +3,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, Dict
 
 from app.risk_mvp import calculate_risk_score, should_send_check_question, get_check_questions, parse_check_response, get_risk_level, RiskHistory, get_check_response_message, get_check_response_guidance
 from app.database.db import get_session
@@ -190,7 +190,7 @@ def kakao_text(text: str) -> JSONResponse:
     )
 
 # 사용자별 위험도 히스토리 관리
-_RISK_HISTORIES = defaultdict(lambda: RiskHistory(max_turns=20, decay_factor=0.8))
+_RISK_HISTORIES: Dict[str, RiskHistory] = {}
 
 async def handle_name_flow(
     session: AsyncSession, 
@@ -552,8 +552,13 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # ====== [자살위험도 분석] ==============================================
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: text='{user_text_stripped}'")
         
+        # 사용자별 위험도 히스토리 가져오기 (없으면 생성)
+        if user_id not in _RISK_HISTORIES:
+            _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, decay_factor=0.8)
+            logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성: user_id={user_id}")
+        
         user_risk_history = _RISK_HISTORIES[user_id]
-        logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}")
+        logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}, turns_count={len(user_risk_history.turns)}")
         
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
@@ -561,6 +566,13 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # 누적 점수 계산 (히스토리 기반)
         cumulative_score = user_risk_history.get_cumulative_score()
         logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
+        
+        # 히스토리 상태 상세 로깅
+        logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
+        if user_risk_history.turns:
+            recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
+            for i, turn in enumerate(recent_turns):
+                logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
         
         risk_level = get_risk_level(cumulative_score)
         logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
