@@ -76,9 +76,8 @@ class LogMessage(SQLModel, table=True):
     """로그 메시지 저장 테이블"""
     log_id: UUID = Field(default_factory=uuid4, primary_key=True)
     level: LogLevel = Field(
-        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False)),
-        default=LogLevel.INFO,
-        index=True
+        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False), index=True),
+        default=LogLevel.INFO
     )
     message: str
     user_id: str = Field(default=None, index=True)  # str 타입으로 통일
