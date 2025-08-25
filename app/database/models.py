@@ -90,3 +90,12 @@ class UserSummary(SQLModel, table=True):
     summary: Optional[str] = None
     last_message_created_at: Optional[datetime] = Field(default=None, index=True)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class RiskState(SQLModel, table=True):
+    """사용자별 자살위험도 상태 테이블"""
+    user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
+    score: int = Field(default=0)  # 현재 위험도 점수 (0-100)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))
+    check_question_sent: bool = Field(default=False)  # 체크 질문 발송 여부
+    last_check_score: Optional[int] = Field(default=None)  # 마지막 체크 질문 응답 점수
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))

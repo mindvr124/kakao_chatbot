@@ -1,6 +1,6 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, EventLog
+from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, EventLog, RiskState
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
@@ -397,3 +397,79 @@ async def get_latest_ai_response(session: AsyncSession, conv_id: UUID) -> str | 
     except Exception as e:
         logger.warning(f"\n[경고] 최근 AI 응답 조회 실패: {e}")
         return None
+
+async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskState:
+    """사용자의 위험도 상태를 조회하거나 생성합니다."""
+    try:
+        risk_state = await session.get(RiskState, user_id)
+        if not risk_state:
+            risk_state = RiskState(user_id=user_id, score=0)
+            session.add(risk_state)
+            try:
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            await session.refresh(risk_state)
+        return risk_state
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
+
+async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> RiskState:
+    """사용자의 위험도 점수를 업데이트합니다."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        risk_state.score = score
+        risk_state.last_updated = datetime.now()
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        await session.refresh(risk_state)
+        return risk_state
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
+
+async def mark_check_question_sent(session: AsyncSession, user_id: str) -> None:
+    """체크 질문이 발송되었음을 표시합니다."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        risk_state.check_question_sent = True
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
+
+async def update_check_response(session: AsyncSession, user_id: str, check_score: int) -> None:
+    """체크 질문 응답 점수를 업데이트합니다."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        risk_state.last_check_score = check_score
+        risk_state.check_question_sent = False  # 응답을 받았으므로 리셋
+        try:
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
