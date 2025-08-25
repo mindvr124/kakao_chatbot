@@ -259,7 +259,7 @@ async def save_event_log(
             user_id=user_id,
             conv_id=conv_uuid,
             request_id=request_id,
-            details_json=details,  # dict를 직접 전달
+            details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
         )
         
         # 별도 세션을 사용하여 이벤트 로그 저장
