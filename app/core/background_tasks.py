@@ -202,11 +202,9 @@ def send_kakao_callback(callback_url, final_answer):
             timeout=8,
             allow_redirects=True,
         )
-        print(f"Callback sent: {response.status_code}")
         logger.info(f"Callback sent successfully: status={response.status_code}")
         return response.status_code == 200
     except Exception as e:
-        print(f"Callback failed: {e}")
         logger.error(f"Failed to send callback to {callback_url}: {e}")
         return False
 

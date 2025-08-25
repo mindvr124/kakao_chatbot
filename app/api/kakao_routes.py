@@ -486,9 +486,7 @@ def _safe_reply_kakao(risk_level: str) -> dict:
 @router.post("/skill/")
 async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
     """카카오 스킬 메인 엔드포인트"""
-    print(f"[PRINT] skill_endpoint 함수 시작!")
-    print(f"[PRINT] ==========================================")
-    logger.info(f"[TEST] skill_endpoint 함수 시작!")
+    logger.info("=== SKILL ENDPOINT STARTED ===")
     
     # X-Request-ID 추출 (로깅용)
     x_request_id = request.headers.get("X-Request-ID", "unknown")
@@ -541,7 +539,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         user_text_stripped = user_text.strip()
 
         # 자살위험도 분석 (히스토리 고려)
-        print(f"[PRINT] 위험도 탐지 시작: {user_text_stripped}")
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: text='{user_text_stripped}'")
         
         user_risk_history = _RISK_HISTORIES[user_id]
@@ -1135,12 +1132,11 @@ async def test_skill_endpoint(request: Request):
     """디버깅용 테스트 엔드포인트 - 받은 데이터를 그대로 반환"""
     try:
         body = await request.json()
-        print("TEST SKILL - Request received")
         logger.info("TEST SKILL - Request received")
         
         return {"status": "test_success", "received_data": body}
     except Exception as e:
-        print(f"TEST SKILL - Error: {e}")
+        logger.error(f"TEST SKILL - Error: {e}")
         return {"error": str(e)}
 
 
@@ -1149,12 +1145,11 @@ async def test_callback_endpoint(request: Request):
     """콜백 테스트용 엔드포인트 - 받은 콜백 데이터를 로깅"""
     try:
         body = await request.json()
-        print("CALLBACK TEST - Request received")
         logger.info("CALLBACK TEST - Request received")
         
         return {"status": "callback_received", "data": body}
     except Exception as e:
-        print(f"CALLBACK TEST - Error: {e}")
+        logger.error(f"CALLBACK TEST - Error: {e}")
         return {"error": str(e)}
 
 
