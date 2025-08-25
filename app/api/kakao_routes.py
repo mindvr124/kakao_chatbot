@@ -540,9 +540,17 @@ async def skill_endpoint(
         user_text_stripped = user_text.strip()
 
         # 자살위험도 분석 (히스토리 고려)
+        print(f"[PRINT] 위험도 탐지 시작: {user_text_stripped}")
+        logger.info(f"[RISK_DEBUG] 위험도 분석 시작: user_id={user_id}, text='{user_text_stripped}'")
+        
         user_risk_history = _RISK_HISTORIES[user_id]
+        logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}")
+        
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
+        logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
+        
         risk_level = get_risk_level(risk_score)
+        logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
         
         # 데이터베이스에 위험도 점수 저장
         try:
@@ -630,12 +638,9 @@ async def skill_endpoint(
                                     {"level": risk_level, "score": risk_score, "evidence": evidence[:3]})
             except Exception:
                 pass
-            return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
-        
-        # 8점 이상이면 체크 질문 발송
-        logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 확인: risk_score={risk_score}, should_send={should_send_check_question(risk_score, user_risk_history)}")
-        
-        if should_send_check_question(risk_score, user_risk_history):
+
+        # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
+        if check_score is None and should_send_check_question(risk_score, user_risk_history):
             logger.info(f"[CHECK] 체크 질문 발송 조건 충족: risk_score={risk_score}")
             try:
                 # RiskHistory에 체크 질문 발송 기록
@@ -654,9 +659,10 @@ async def skill_endpoint(
                 logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
                 import traceback
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
-        else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: risk_score={risk_score}")
+        elif check_score is None:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: risk_score={risk_score}, should_send={should_send_check_question(risk_score, user_risk_history)}")
 
+        # ====== [이름 플로우 처리] ==============================================
         # 이름 관련 플로우 처리
         name_response = await handle_name_flow(session, user_id, user_text_stripped, x_request_id)
         if name_response:

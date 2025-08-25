@@ -190,7 +190,7 @@ async def save_log_message(
     conv_id = None,
     source: str | None = None,
 ) -> bool:
-    """로그 메시지를 저장합니다. 성공 여부를 반환합니다."""
+    """로그 메시지를 저장합니다. 별도 세션을 사용하여 기존 트랜잭션과 충돌하지 않습니다."""
     try:
         from app.database.models import LogMessage
         from uuid import UUID
@@ -208,14 +208,33 @@ async def save_log_message(
             conv_id=conv_uuid,
             source=source
         )
-        session.add(log_msg)
-        await session.commit()
-        return True
-    except Exception:
+        
+        # 별도 세션을 사용하여 로그 메시지 저장
+        from app.database.db import get_session
+        async for s in get_session():
+            try:
+                s.add(log_msg)
+                await s.commit()
+                return True
+            except Exception as commit_error:
+                logger.warning(f"save_log_message 커밋 실패: {commit_error}")
+                try:
+                    await s.rollback()
+                except Exception:
+                    pass
+                break
+                
+        # 별도 세션 실패 시 기존 세션에 추가 시도 (fallback)
         try:
-            await session.rollback()
-        except Exception:
-            pass
+            session.add(log_msg)
+            # 기존 세션은 호출자가 관리하므로 커밋하지 않음
+            return True
+        except Exception as fallback_error:
+            logger.error(f"save_log_message fallback 실패: {fallback_error}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"save_log_message 전체 실패: {e}")
         return False
 
 async def save_event_log(
@@ -226,6 +245,7 @@ async def save_event_log(
     request_id: str | None = None,
     details: dict | None = None,
 ):
+    """이벤트 로그를 저장합니다. 별도 세션을 사용하여 기존 트랜잭션과 충돌하지 않습니다."""
     try:
         from uuid import UUID
         conv_uuid = None
@@ -233,6 +253,7 @@ async def save_event_log(
             conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
         except Exception:
             conv_uuid = None
+        
         log = EventLog(
             event_type=event_type,
             user_id=user_id,
@@ -240,43 +261,30 @@ async def save_event_log(
             request_id=request_id,
             details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
         )
-        session.add(log)
-        await session.commit()
-    except Exception:
-        # 기존 세션이 중단 상태일 수 있으므로 롤백 후 별도 세션으로 재시도
-        try:
-            await session.rollback()
-        except Exception:
-            pass
-        try:
-            from app.database.db import get_session
-            async for s in get_session():
+        
+        # 별도 세션을 사용하여 이벤트 로그 저장
+        from app.database.db import get_session
+        async for s in get_session():
+            try:
+                s.add(log)
+                await s.commit()
+                break
+            except Exception as commit_error:
+                logger.warning(f"save_event_log 커밋 실패: {commit_error}")
                 try:
-                    from uuid import UUID
-                    conv_uuid = None
-                    try:
-                        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
-                    except Exception:
-                        conv_uuid = None
-                    log = EventLog(
-                        event_type=event_type,
-                        user_id=user_id,
-                        conv_id=conv_uuid,
-                        request_id=request_id,
-                        details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
-                    )
-                    s.add(log)
-                    await s.commit()
-                    break
+                    await s.rollback()
                 except Exception:
-                    try:
-                        await s.rollback()
-                    except Exception:
-                        pass
-                    break
-        except Exception:
-            pass
-        return
+                    pass
+                break
+                
+    except Exception as e:
+        logger.error(f"save_event_log 전체 실패: {e}")
+        # 기존 세션에 추가 시도 (fallback)
+        try:
+            session.add(log)
+            # 기존 세션은 호출자가 관리하므로 커밋하지 않음
+        except Exception as fallback_error:
+            logger.error(f"save_event_log fallback 실패: {fallback_error}")
 
 # 프롬프트 관리 함수들
 async def create_prompt_template(
