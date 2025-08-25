@@ -3,15 +3,15 @@ from sqlmodel import SQLModel, Field, Relationship
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from uuid import uuid4, UUID
-from enum import Enum
-from sqlalchemy import JSON
+import enum as pyenum
+from sqlalchemy.dialects.postgresql import JSONB
 
-class MessageRole(str, Enum):
+class MessageRole(str, pyenum.Enum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
 
-class AIProcessingStatus(str, Enum):
+class AIProcessingStatus(str, pyenum.Enum):
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -20,12 +20,12 @@ class AIProcessingStatus(str, Enum):
 class AppUser(SQLModel, table=True):
     user_id: str = Field(primary_key=True)
     user_name: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))
 
 class Conversation(SQLModel, table=True):
     conv_id: UUID = Field(default_factory=uuid4, primary_key=True)
     user_id: str = Field(foreign_key="appuser.user_id", index=True)
-    started_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
     ended_at: Optional[datetime] = Field(default=None)
     summary: Optional[str] = None
 
@@ -72,7 +72,7 @@ class LogMessage(SQLModel, table=True):
     message: str
     user_id: str | None = Field(default=None, index=True)  # str 타입으로 통일
     conv_id: UUID | None = Field(default=None, foreign_key="conversation.conv_id", index=True)
-    source: Any | None = Field(default=None, sa_column=JSON)  # JSONB로 변경하여 딕셔너리/리스트 저장 가능
+    source: Any | None = Field(default=None, sa_column=JSONB)  # JSONB로 변경하여 딕셔너리/리스트 저장 가능
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
 class UserSummary(SQLModel, table=True):
@@ -80,7 +80,7 @@ class UserSummary(SQLModel, table=True):
     user_id: str = Field(primary_key=True, foreign_key="appuser.user_id")
     summary: Optional[str] = None
     last_message_created_at: Optional[datetime] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))
 
 class RiskState(SQLModel, table=True, table_name="riskstate"):
     """사용자별 자살위험도 상태 테이블"""
