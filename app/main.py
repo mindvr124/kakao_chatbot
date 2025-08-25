@@ -5,6 +5,13 @@ import asyncio
 import httpx
 from fastapi import FastAPI
 from loguru import logger
+import logging
+
+# SQLAlchemy 로깅 레벨 설정 (쿼리문 안 뜨게)
+logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.dialects').setLevel(logging.WARNING)
+logging.getLogger('sqlalchemy.orm').setLevel(logging.WARNING)
 
 # 로거 설정
 logger.remove()  # 기본 핸들러 제거

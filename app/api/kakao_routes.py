@@ -487,6 +487,7 @@ def _safe_reply_kakao(risk_level: str) -> dict:
 async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
     """카카오 스킬 메인 엔드포인트"""
     print(f"[PRINT] skill_endpoint 함수 시작!")
+    print(f"[PRINT] ==========================================")
     logger.info(f"[TEST] skill_endpoint 함수 시작!")
     
     # X-Request-ID 추출 (로깅용)
@@ -540,9 +541,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         user_text_stripped = user_text.strip()
 
         # 자살위험도 분석 (히스토리 고려)
+        print(f"[PRINT] ==========================================")
         print(f"[PRINT] 위험도 탐지 시작: {user_text_stripped}")
         print(f"[PRINT] user_id: {user_id}")
         print(f"[PRINT] 위험도 탐지 코드 실행 중...")
+        print(f"[PRINT] ==========================================")
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: user_id={user_id}, text='{user_text_stripped}'")
         
         user_risk_history = _RISK_HISTORIES[user_id]
