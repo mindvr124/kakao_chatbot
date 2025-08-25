@@ -1,6 +1,6 @@
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, EventLog, RiskState
+from app.database.models import AppUser, Conversation, Message, PromptTemplate, PromptLog, UserSummary, RiskState
 from app.utils.utils import session_expired
 from datetime import datetime
 from typing import Optional, List
@@ -237,54 +237,7 @@ async def save_log_message(
         logger.error(f"save_log_message 전체 실패: {e}")
         return False
 
-async def save_event_log(
-    session: AsyncSession,
-    event_type: str,
-    user_id: str | None = None,
-    conv_id = None,
-    request_id: str | None = None,
-    details: dict | None = None,
-):
-    """이벤트 로그를 저장합니다. 별도 세션을 사용하여 기존 트랜잭션과 충돌하지 않습니다."""
-    try:
-        from uuid import UUID
-        conv_uuid = None
-        try:
-            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
-        except Exception:
-            conv_uuid = None
-        
-        log = EventLog(
-            event_type=event_type,
-            user_id=user_id,
-            conv_id=conv_uuid,
-            request_id=request_id,
-            details_json=(__import__('json').dumps(details, ensure_ascii=False) if details else None),
-        )
-        
-        # 별도 세션을 사용하여 이벤트 로그 저장
-        from app.database.db import get_session
-        async for s in get_session():
-            try:
-                s.add(log)
-                await s.commit()
-                break
-            except Exception as commit_error:
-                logger.warning(f"save_event_log 커밋 실패: {commit_error}")
-                try:
-                    await s.rollback()
-                except Exception:
-                    pass
-                break
-                
-    except Exception as e:
-        logger.error(f"save_event_log 전체 실패: {e}")
-        # 기존 세션에 추가 시도 (fallback)
-        try:
-            session.add(log)
-            # 기존 세션은 호출자가 관리하므로 커밋하지 않음
-        except Exception as fallback_error:
-            logger.error(f"save_event_log fallback 실패: {fallback_error}")
+
 
 # 프롬프트 관리 함수들
 async def create_prompt_template(
