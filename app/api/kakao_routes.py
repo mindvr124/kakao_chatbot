@@ -8,7 +8,7 @@ from typing import Optional
 from app.risk_mvp import calculate_risk_score, should_send_check_question, get_check_questions, parse_check_response, get_risk_level, RiskHistory, get_check_response_message, get_check_response_guidance
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
-from app.database.service import upsert_user, get_or_create_conversation, save_message, save_event_log, save_log_message, get_or_create_risk_state, update_risk_score, mark_check_question_sent, update_check_response
+from app.database.service import upsert_user, get_or_create_conversation, save_message, save_log_message, get_or_create_risk_state, update_risk_score, mark_check_question_sent, update_check_response
 from app.database.models import AppUser
 from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
 from app.core.ai_service import ai_service
@@ -164,7 +164,6 @@ async def save_user_name(session: AsyncSession, user_id: str, name: str):
     
     # 이름 변경 완료 로그 저장
     try:
-        from app.database.service import save_log_message
         success = await save_log_message(
             session=session,
             level="INFO",
@@ -233,7 +232,7 @@ async def handle_name_flow(
                             await save_user_name(session, user_id, cand)
                             PendingNameCache.clear(user_id)
                             try:
-                                await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
+                                await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
                             except Exception:
                                 pass
                             return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
@@ -252,7 +251,7 @@ async def handle_name_flow(
                 logger.info(f"\n[인사] 인삿말 감지: '{user_text}' -> 이름 대기 상태 설정")
                 PendingNameCache.set_waiting(user_id)
                 try:
-                    await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
+                    await save_log_message(session, "name_wait_start", user_id, None, x_request_id, None)
                 except Exception:
                     pass
                 return kakao_text(random.choice(_WELCOME_MESSAGES))
@@ -261,7 +260,7 @@ async def handle_name_flow(
                 logger.info(f"\n[질문] 인삿말 아님: '{user_text}' -> 이름 대기 상태 설정")
                 PendingNameCache.set_waiting(user_id)
                 try:
-                    await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
+                    await save_log_message(session, "name_wait_start", user_id, None, x_request_id, None)
                 except Exception:
                     pass
                 return kakao_text("안녕! 처음 보네~ 나는 나온이야 🦉\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줘!")
@@ -278,7 +277,7 @@ async def handle_name_flow(
         if user_text == "/이름":
             PendingNameCache.set_waiting(user_id)
             try:
-                await save_event_log(session, "name_wait_start", user_id, None, x_request_id, None)
+                await save_log_message(session, "name_wait_start", user_id, None, x_request_id, None)
             except Exception:
                 pass
             return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 나온이가 꼭 기억할게~")
@@ -292,7 +291,7 @@ async def handle_name_flow(
             if user_text in ("취소", "그만", "아냐", "아니야", "됐어", "아니"):
                 PendingNameCache.clear(user_id)
                 try:
-                    await save_event_log(session, "name_wait_cancel", user_id, None, x_request_id, None)
+                    await save_log_message(session, "name_wait_cancel", user_id, None, x_request_id, None)
                 except Exception:
                     pass
                 return kakao_text("좋아, 다음에 다시 알려줘!")
@@ -306,7 +305,7 @@ async def handle_name_flow(
                 await save_user_name(session, user_id, cand)
                 PendingNameCache.clear(user_id)
                 try:
-                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "ai_name_request"})
+                    await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "ai_name_request"})
                 except Exception:
                     pass
                 return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
@@ -342,7 +341,7 @@ async def handle_name_flow(
                     # 이름 대기 상태 설정 - 다음 사용자 입력을 이름으로 받기
                     PendingNameCache.set_waiting(user_id)
                     try:
-                        await save_event_log(session, "name_change_request", user_id, None, x_request_id, {
+                        await save_log_message(session, "name_change_request", user_id, None, x_request_id, {
                             "current_name": user.user_name, 
                             "trigger": "ai_name_request",
                             "matched_patterns": matched_patterns,
@@ -402,7 +401,7 @@ async def handle_name_flow(
                 current_name = user.user_name
                 PendingNameCache.set_waiting(user_id)
                 try:
-                    await save_event_log(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name, "trigger": "explicit_request"})
+                    await save_log_message(session, "name_change_request", user_id, None, x_request_id, {"current_name": current_name, "trigger": "explicit_request"})
                 except Exception:
                     pass
                 return kakao_text(f"현재 '{current_name}'으로 알고 있는데, 어떤 이름으로 바꾸고 싶어?")
@@ -423,7 +422,7 @@ async def handle_name_flow(
                         try:
                             await save_user_name(session, user_id, extracted_name)
                             try:
-                                await save_event_log(session, "name_auto_extracted", user_id, None, x_request_id, {
+                                await save_log_message(session, "name_auto_extracted", user_id, None, x_request_id, {
                                     "old_name": old_name,
                                     "new_name": extracted_name,
                                     "trigger": "pattern_detection"
@@ -447,7 +446,7 @@ async def handle_name_flow(
             try:
                 await save_user_name(session, user_id, cand)
                 try:
-                    await save_event_log(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "slash_inline"})
+                    await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "slash_inline"})
                 except Exception:
                     pass
                 return kakao_text(f"예쁜 이름이다! 앞으로는 {cand}(이)라고 불러줄게~")
@@ -485,13 +484,14 @@ def _safe_reply_kakao(risk_level: str) -> dict:
 
 @router.post("/skill")
 @router.post("/skill/")
-async def skill_endpoint(
-    request: Request,
-    session: AsyncSession = Depends(get_session)
-):
-    # 최우선 로그 - 요청이 들어왔다는 것만 확인
-    print(f"=== SKILL REQUEST RECEIVED ===")
-    logger.info("=== SKILL REQUEST RECEIVED ===")
+async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
+    """카카오 스킬 메인 엔드포인트"""
+    print(f"[PRINT] skill_endpoint 함수 시작!")
+    logger.info(f"[TEST] skill_endpoint 함수 시작!")
+    
+    # X-Request-ID 추출 (로깅용)
+    x_request_id = request.headers.get("X-Request-ID", "unknown")
+    logger.bind(x_request_id=x_request_id).info("SKILL REQUEST RECEIVED")
     
     try:
         # 1) 헤더 추적자
@@ -541,6 +541,8 @@ async def skill_endpoint(
 
         # 자살위험도 분석 (히스토리 고려)
         print(f"[PRINT] 위험도 탐지 시작: {user_text_stripped}")
+        print(f"[PRINT] user_id: {user_id}")
+        print(f"[PRINT] 위험도 탐지 코드 실행 중...")
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: user_id={user_id}, text='{user_text_stripped}'")
         
         user_risk_history = _RISK_HISTORIES[user_id]
@@ -584,7 +586,7 @@ async def skill_endpoint(
                 if check_score >= 9:
                     logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
                     try:
-                        await save_event_log(session, "check_response_critical",
+                        await save_log_message(session, "check_response_critical",
                                             user_id, None,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
@@ -596,7 +598,7 @@ async def skill_endpoint(
                 elif check_score >= 7:
                     logger.info(f"[CHECK] 위험도 7-8점: 안전 안내 메시지 발송")
                     try:
-                        await save_event_log(session, "check_response_high_risk",
+                        await save_log_message(session, "check_response_high_risk",
                                             user_id, None,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
@@ -610,7 +612,7 @@ async def skill_endpoint(
                 else:
                     logger.info(f"[CHECK] 위험도 0-6점: 일반 대응 메시지 발송")
                     try:
-                        await save_event_log(session, "check_response_normal",
+                        await save_log_message(session, "check_response_normal",
                                             user_id, None,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
@@ -632,7 +634,7 @@ async def skill_endpoint(
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
             try:
-                await save_event_log(session, "risk_trigger",
+                await save_log_message(session, "risk_trigger",
                                     user_id, None,
                                     x_request_id,
                                     {"level": risk_level, "score": risk_score, "evidence": evidence[:3]})
@@ -678,7 +680,7 @@ async def skill_endpoint(
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_event_log(session, "request_received", user_id, None, x_request_id, {"callback": True})
+                    await save_log_message(session, "request_received", user_id, None, x_request_id, {"callback": True})
                 except Exception:
                     pass
 
@@ -750,7 +752,7 @@ async def skill_endpoint(
                 "useCallback": True
             }
             try:
-                await save_event_log(session, "callback_waiting_sent", user_id, None, x_request_id, None)
+                await save_log_message(session, "callback_waiting_sent", user_id, None, x_request_id, None)
             except Exception:
                 pass
 
@@ -935,7 +937,7 @@ async def skill_endpoint(
                             )
                             await save_message(s, conv_id_value, "assistant", final_text, trace_id, tokens_used, user_id)
                             try:
-                                await save_event_log(s, "callback_final_sent", user_id, conv_id_value, request_id, {"tokens": tokens_used})
+                                await save_log_message(s, "callback_final_sent", user_id, conv_id_value, request_id, {"tokens": tokens_used})
                             except Exception:
                                 pass
                             try:
@@ -1012,7 +1014,7 @@ async def skill_endpoint(
             
 
             try:
-                await save_event_log(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
+                await save_log_message(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
                 pass
             

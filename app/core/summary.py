@@ -4,7 +4,7 @@ from typing import Optional
 from loguru import logger
 
 from app.database.models import Message, Conversation, UserSummary
-from app.database.service import save_event_log
+from app.database.service import save_log_message
 from app.database.models import Conversation as DBConversation
 
 class SummaryResponse:
@@ -168,7 +168,7 @@ async def maybe_rollup_user_summary(
     if new_count < MAX_TURNS:
         # 이벤트 로그(스킵)
         try:
-            await save_event_log(session, "summary_rollup_skipped", user_id, None, None, {"new_count": new_count, "need": MAX_TURNS})
+            await save_log_message(session, "summary_rollup_skipped", user_id, None, None, {"new_count": new_count, "need": MAX_TURNS})
         except Exception:
             pass
         return
@@ -195,7 +195,7 @@ async def maybe_rollup_user_summary(
     except Exception as e:
         logger.warning(f"롤업 요약 생성 실패: {e}")
         try:
-            await save_event_log(session, "summary_rollup_failed", user_id, None, None, {"error": str(e)[:300]})
+            await save_log_message(session, "summary_rollup_failed", user_id, None, None, {"error": str(e)[:300]})
         except Exception:
             pass
         return
@@ -211,7 +211,7 @@ async def maybe_rollup_user_summary(
         await session.rollback()
         raise
     try:
-        await save_event_log(session, "summary_rollup_saved", user_id, None, None, {"len": len(us.summary or ""), "used_msgs": len(recent)})
+        await save_log_message(session, "summary_rollup_saved", user_id, None, None, {"len": len(us.summary or ""), "used_msgs": len(recent)})
     except Exception:
         pass
 
