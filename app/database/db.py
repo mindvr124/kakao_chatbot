@@ -16,7 +16,7 @@ def create_database_engine():
     try:
         engine = create_async_engine(
             settings.database_url,
-            echo=settings.debug,
+            echo=False,  # SQL 쿼리 에코 완전 차단
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=20,

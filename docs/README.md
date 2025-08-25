@@ -99,6 +99,34 @@ cp .env.example .env
 # OPENAI_API_KEY=your_openai_api_key_here
 ```
 
+### 2. 서버 실행
+
+#### 방법 1: Python 스크립트로 실행 (권장)
+```bash
+# 프로젝트 루트에서
+python run_server.py
+```
+
+#### 방법 2: Windows 배치 파일로 실행
+```bash
+# 프로젝트 루트에서
+run_server.bat
+```
+
+#### 방법 3: 직접 uvicorn 실행
+```bash
+# logging.ini 설정 적용
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-config logging.ini --access-log false
+```
+
+### 3. 로깅 설정
+
+프로젝트에는 `logging.ini` 파일이 포함되어 있어 SQL 쿼리 에코와 uvicorn 로깅을 자동으로 제어합니다:
+
+- **SQLAlchemy**: `echo=False`로 설정하여 쿼리 로그 비활성화
+- **Uvicorn**: WARNING 레벨로 설정하여 불필요한 로그 차단
+- **Access Log**: CRITICAL 레벨로 설정하여 HTTP 요청 로그 최소화
+
 ### 2. 패키지 설치
 
 ```bash
