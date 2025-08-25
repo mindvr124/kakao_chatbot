@@ -492,12 +492,12 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
     
     # X-Request-ID 추출 (로깅용)
     x_request_id = request.headers.get("X-Request-ID", "unknown")
-    logger.bind(x_request_id=x_request_id).info("SKILL REQUEST RECEIVED")
+    logger.bind(x_request_id=x_request_id).info("Skill endpoint started")
     
     try:
         # 1) 헤더 추적자
         x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-        logger.bind(x_request_id=x_request_id).info("Incoming skill request")
+        logger.bind(x_request_id=x_request_id).info("Skill request received")
 
         # 전체 요청 시간 추적 (카카오 5초 제한 준수)
         t0 = time.perf_counter()
@@ -511,7 +511,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             body_dict = {}
         
         # 서버가 받은 데이터 로깅
-        logger.bind(x_request_id=x_request_id).info(f"Received body: {body_dict}")
+        logger.bind(x_request_id=x_request_id).info("Request body received")
         
         user_id = extract_user_id(body_dict)
         logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
@@ -526,10 +526,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if not user_id:
             anon_suffix = x_request_id or "unknown"
             user_id = f"anonymous:{anon_suffix}"
-            logger.bind(x_request_id=x_request_id).warning(f"user_id missing. fallback -> {user_id}")
+            logger.bind(x_request_id=x_request_id).warning(f"user_id missing. fallback -> anonymous")
 
         callback_url = extract_callback_url(body_dict)
-        logger.bind(x_request_id=x_request_id).info(f"Extracted callback_url: {callback_url}")
+        logger.bind(x_request_id=x_request_id).info("Callback URL extracted")
 
         # 2) 사용자 발화 추출
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
@@ -541,12 +541,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         user_text_stripped = user_text.strip()
 
         # 자살위험도 분석 (히스토리 고려)
-        print(f"[PRINT] ==========================================")
         print(f"[PRINT] 위험도 탐지 시작: {user_text_stripped}")
-        print(f"[PRINT] user_id: {user_id}")
-        print(f"[PRINT] 위험도 탐지 코드 실행 중...")
-        print(f"[PRINT] ==========================================")
-        logger.info(f"[RISK_DEBUG] 위험도 분석 시작: user_id={user_id}, text='{user_text_stripped}'")
+        logger.info(f"[RISK_DEBUG] 위험도 분석 시작: text='{user_text_stripped}'")
         
         user_risk_history = _RISK_HISTORIES[user_id]
         logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}")
@@ -559,17 +555,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # 데이터베이스에 위험도 점수 저장
         try:
-            logger.info(f"[RISK_SAVE] 위험도 점수 저장 시도: user_id={user_id}, score={risk_score}")
+            logger.info(f"[RISK_SAVE] 위험도 점수 저장 시도: score={risk_score}")
             await update_risk_score(session, user_id, risk_score)
-            logger.info(f"[RISK_SAVE] 위험도 점수 저장 성공: user_id={user_id}, score={risk_score}")
+            logger.info(f"[RISK_SAVE] 위험도 점수 저장 성공: score={risk_score}")
         except Exception as e:
-            logger.error(f"[RISK_SAVE] 위험도 점수 저장 실패: user_id={user_id}, score={risk_score}, error={e}")
+            logger.error(f"[RISK_SAVE] 위험도 점수 저장 실패: score={risk_score}, error={e}")
             import traceback
             logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
         
         # 위험도 추세 분석
         risk_trend = user_risk_history.get_risk_trend()
-        logger.info(f"[RISK] user={user_id} score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
+        logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
         
         # 체크 질문 응답인지 확인
         check_score = parse_check_response(user_text_stripped)
@@ -1102,7 +1098,7 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
     try:
         # 1) 요청 처리
         x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-        logger.bind(x_request_id=x_request_id).info("Incoming welcome skill request")
+        logger.bind(x_request_id=x_request_id).info("Welcome skill request received")
         
         try:
             body = await request.json()
@@ -1117,7 +1113,7 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
         if not user_id:
             anon_suffix = x_request_id or "unknown"
             user_id = f"anonymous:{anon_suffix}"
-            logger.warning(f"No user_id in welcome skill, using fallback: {user_id}")
+            logger.warning("No user_id in welcome skill, using fallback")
             
         # 3) 웰컴 메시지 전송
         response_text = random.choice(_WELCOME_MESSAGES)
@@ -1139,8 +1135,8 @@ async def test_skill_endpoint(request: Request):
     """디버깅용 테스트 엔드포인트 - 받은 데이터를 그대로 반환"""
     try:
         body = await request.json()
-        print(f"TEST SKILL - Received: {body}")
-        logger.info(f"TEST SKILL - Received: {body}")
+        print("TEST SKILL - Request received")
+        logger.info("TEST SKILL - Request received")
         
         return {"status": "test_success", "received_data": body}
     except Exception as e:
@@ -1153,8 +1149,8 @@ async def test_callback_endpoint(request: Request):
     """콜백 테스트용 엔드포인트 - 받은 콜백 데이터를 로깅"""
     try:
         body = await request.json()
-        print(f"CALLBACK TEST - Received: {body}")
-        logger.info(f"CALLBACK TEST - Received: {body}")
+        print("CALLBACK TEST - Request received")
+        logger.info("CALLBACK TEST - Request received")
         
         return {"status": "callback_received", "data": body}
     except Exception as e:
