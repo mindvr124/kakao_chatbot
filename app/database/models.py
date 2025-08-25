@@ -24,6 +24,8 @@ class LogLevel(str, pyenum.Enum):
     ERROR = "ERROR"
     DEBUG = "DEBUG"
 
+
+
 class AppUser(SQLModel, table=True):
     user_id: str = Field(primary_key=True)
     user_name: str = Field(default=None)
@@ -40,7 +42,10 @@ class Message(SQLModel, table=True):
     msg_id: UUID = Field(default_factory=uuid4, primary_key=True)
     conv_id: UUID = Field(foreign_key="conversation.conv_id", index=True)
     user_id: str = Field(default=None, foreign_key="appuser.user_id", index=True)
-    role: MessageRole = Field(index=True)
+    role: MessageRole = Field(
+        sa_column=Column(SAEnum(MessageRole, name="message_role", native_enum=False)),
+        default=MessageRole.USER
+    )
     content: str
     tokens: int = Field(default=None)
     request_id: str = Field(default=None, index=True)  # X-Request-ID 값
@@ -76,7 +81,7 @@ class LogMessage(SQLModel, table=True):
     """로그 메시지 저장 테이블"""
     log_id: UUID = Field(default_factory=uuid4, primary_key=True)
     level: LogLevel = Field(
-        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False), index=True),
+        sa_column=Column(SAEnum(LogLevel, name="log_level", native_enum=False)),
         default=LogLevel.INFO
     )
     message: str
