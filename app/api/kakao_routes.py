@@ -554,8 +554,30 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # 사용자별 위험도 히스토리 가져오기 (없으면 생성)
         if user_id not in _RISK_HISTORIES:
-            _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, decay_factor=0.8)
-            logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성: user_id={user_id}")
+            # 데이터베이스에서 기존 위험도 점수 복원 시도
+            try:
+                from app.database.service import get_risk_state
+                existing_risk = await get_risk_state(session, user_id)
+                if existing_risk and existing_risk.score > 0:
+                    # 기존 점수가 있으면 초기 턴으로 복원
+                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, decay_factor=0.8)
+                    # 기존 점수를 첫 번째 턴으로 추가 (가상의 턴으로 복원)
+                    virtual_turn = {
+                        'text': f"[복원된_기존_점수:{existing_risk.score}점]",
+                        'timestamp': existing_risk.last_updated,
+                        'score': existing_risk.score,
+                        'flags': {'neg': False, 'meta': False, 'third': False, 'idiom': False, 'past': False},
+                        'evidence': [{'keyword': '복원된_점수', 'score': existing_risk.score, 'original_score': existing_risk.score, 'excerpt': '데이터베이스에서_복원'}]
+                    }
+                    _RISK_HISTORIES[user_id].turns.append(virtual_turn)
+                    logger.info(f"[RISK_DEBUG] 기존 점수 복원 완료: user_id={user_id}, score={existing_risk.score}, turns_count={len(_RISK_HISTORIES[user_id].turns)}")
+                else:
+                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, decay_factor=0.8)
+                    logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성: user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"[RISK_DEBUG] 기존 점수 복원 실패: {e}")
+                _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, decay_factor=0.8)
+                logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성 (복원 실패): user_id={user_id}")
         
         user_risk_history = _RISK_HISTORIES[user_id]
         logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}, turns_count={len(user_risk_history.turns)}")

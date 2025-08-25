@@ -11,10 +11,10 @@ RISK_PATTERNS = {
         re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽으면\s*편하|뛰어내리다|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
     ],
     7: [   # 간접적 자살 사고 표현
-        re.compile(r"(죽고\s*싶|살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기할래|의미\s*없)"),
+        re.compile(r"(죽고\s*싶|살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기할래|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
     ],
     4: [   # 자존감 저하·학대·왕따 등
-        re.compile(r"(쓸모\s*없|필요\s*없|잘못된\s*사람|아무것도\s*못\s*해|내\s*탓|내가\s*문제|맞았어|괴롭힘|왕따|따돌림|욕설|부모\s*맞았|무서워|때리|때려|몽둥이)"),
+        re.compile(r"(쓸모\s*없|필요\s*없|잘못된\s*사람|아무것도\s*못\s*해|내\s*탓|내가\s*문제|맞았어|괴롭힘|왕따|따돌림|욕설|부모\s*맞았|무서워|때리|때려|몽둥이|폭력)")
     ],
     2: [   # 일반적 스트레스·우울 신호
         re.compile(r"(힘들|지쳤|하기\s*싫|의욕\s*없|기운\s*없|혼자\s*있고\s*싶|외롭|숨\s*막힌다|우울|무기력|숨막\s*)"),
@@ -22,11 +22,15 @@ RISK_PATTERNS = {
 }
 
 # 부정어, 메타언어, 3인칭, 관용어, 과거시제 패턴
+# 부정어: 일반적인 부정 표현 (하지만 "살고싶지않아" 같은 위험 표현은 제외)
 P_NEG = re.compile(r"(않|안|싶지\s*않|싶진\s*않)")
 P_META = re.compile(r"(뉴스|기사|드라마|가사|영화|예시|논문|수업|연구|애니|소설설)")
 P_THIRD = re.compile(r"(친구|사람들|누가|그[가녀])")
 P_IDIOM = re.compile(r"(죽을맛|웃겨\s*죽|맛\s*죽이)")
 P_PAST = re.compile(r"(예전에|한때|옛날에|과거에)")
+
+# 긍정 발화 패턴 (감점 적용)
+P_POSITIVE = re.compile(r"(괜찮아|괜찮|나아졌어|덜\s*힘들어|고마워|좋아졌어|살아야지|희망이\s*생겼어|내일은\s*괜찮을\s*거야|얘기하니까\s*마음이\s*가벼워졌어|죽고\s*싶지\s*않아|그럴\s*생각\s*없어|이제\s*좀\s*괜찮은\s*것\s*같아)")
 
 class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
@@ -80,17 +84,14 @@ class RiskHistory:
         logger.info(f"[RISK_HISTORY] 누적 점수 계산 시작: turns_count={len(self.turns)}")
         
         for i, turn in enumerate(self.turns):
-            # 최신 턴일수록 높은 가중치 (시간 감쇠)
+            # 시간에 따른 감쇠만 적용 (턴 순서 감소 제거)
             time_diff = (current_time - turn['timestamp']).total_seconds() / 60  # 분 단위
             decay = self.decay_factor ** (time_diff / 10)  # 10분마다 decay_factor만큼 감쇠
             
-            # 턴 순서에 따른 추가 가중치 (최신 턴일수록 높음)
-            recency_weight = 1.0 - (i * 0.1)  # 최신 턴부터 0.1씩 감소
-            
-            weighted_score = int(turn['score'] * decay * recency_weight)
+            weighted_score = int(turn['score'] * decay)
             total_score += weighted_score
             
-            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, recency_weight={recency_weight:.3f}, weighted_score={weighted_score}")
+            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, weighted_score={weighted_score}")
         
         final_score = min(100, total_score)
         logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}")
@@ -153,8 +154,12 @@ class RiskHistory:
                 for match in matches:
                     matched_text = match.group()
                     
-                    # 부정어가 포함된 경우 점수 차감
-                    actual_score = 0 if flags["neg"] else score
+                    # 특별한 위험 표현은 부정어가 있어도 점수 부여
+                    special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
+                    is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
+                    
+                    # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
+                    actual_score = 0 if (flags["neg"] and not is_special_danger) else score
                     
                     # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
                     if flags["past"] and score >= 7:  # 7점 이상(자살 관련)만 차감
@@ -169,6 +174,17 @@ class RiskHistory:
                             "excerpt": self._get_context(text_lower, match.start(), match.end())
                         })
         
+        # 긍정 발화 감점 적용 (-2점, 최저 0점)
+        if P_POSITIVE.search(text_lower):
+            total_score = max(0, total_score - 2)
+            evidence.append({
+                "keyword": "긍정_발화",
+                "score": -2,
+                "original_score": -2,
+                "excerpt": "긍정적인 발화로 인한 감점"
+            })
+            logger.info(f"[RISK_HISTORY] 긍정 발화 감점 적용: -2점, 최종 점수={total_score}")
+        
         return {
             'score': total_score,
             'flags': flags,
@@ -182,7 +198,8 @@ class RiskHistory:
             "meta": bool(P_META.search(text)),
             "third": bool(P_THIRD.search(text)),
             "idiom": bool(P_IDIOM.search(text)),
-            "past": bool(P_PAST.search(text))
+            "past": bool(P_PAST.search(text)),
+            "positive": bool(P_POSITIVE.search(text))
         }
     
     def _get_context(self, text: str, start: int, end: int, context_chars: int = 10) -> str:
@@ -233,8 +250,12 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                 for match in matches:
                     matched_text = match.group()
                     
-                    # 부정어가 포함된 경우 점수 차감
-                    actual_score = 0 if flags["neg"] else score
+                    # 특별한 위험 표현은 부정어가 있어도 점수 부여
+                    special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
+                    is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
+                    
+                    # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
+                    actual_score = 0 if (flags["neg"] and not is_special_danger) else score
                     
                     # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
                     if flags["past"] and score >= 7:  # 7점 이상(자살 관련)만 차감
@@ -248,6 +269,17 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                             "original_score": score,
                             "excerpt": _get_context(text_lower, match.start(), match.end())
                         })
+        
+        # 긍정 발화 감점 적용 (-2점, 최저 0점)
+        if P_POSITIVE.search(text_lower):
+            total_score = max(0, total_score - 2)
+            evidence.append({
+                "keyword": "긍정_발화",
+                "score": -2,
+                "original_score": -2,
+                "excerpt": "긍정적인 발화로 인한 감점"
+            })
+            logger.info(f"[RISK_HISTORY] 긍정 발화 감점 적용: -2점, 최종 점수={total_score}")
         
         return total_score, flags, evidence
 
