@@ -196,7 +196,8 @@ async def handle_name_flow(
     session: AsyncSession, 
     user_id: str, 
     user_text: str, 
-    x_request_id: str
+    x_request_id: str,
+    conv_id: str | None = None
 ) -> Optional[JSONResponse]:
     """
     이름 관련 플로우를 처리합니다.
@@ -232,7 +233,7 @@ async def handle_name_flow(
                             await save_user_name(session, user_id, cand)
                             PendingNameCache.clear(user_id)
                             try:
-                                await save_log_message(session, "name_saved", user_id, None, x_request_id, {"name": cand, "mode": "first_chat"})
+                                await save_log_message(session, "name_saved", user_id, conv_id, x_request_id, {"name": cand, "mode": "first_chat"})
                             except Exception:
                                 pass
                             return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🦉")
@@ -538,7 +539,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             user_text = "안녕하세요"
         user_text_stripped = user_text.strip()
 
-        # 자살위험도 분석 (히스토리 고려)
+        # ====== [대화 세션 생성] ==============================================
+        # 대화 세션을 먼저 생성하여 conv_id 확보
+        try:
+            conv = await get_or_create_conversation(session, user_id)
+            conv_id = conv.conv_id
+            logger.info(f"[CONV] 대화 세션 생성/조회 완료: conv_id={conv_id}")
+        except Exception as e:
+            logger.warning(f"[CONV] 대화 세션 생성 실패: {e}")
+            conv_id = None
+        
+        # ====== [자살위험도 분석] ==============================================
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: text='{user_text_stripped}'")
         
         user_risk_history = _RISK_HISTORIES[user_id]
@@ -547,16 +558,20 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
         
-        risk_level = get_risk_level(risk_score)
+        # 누적 점수 계산 (히스토리 기반)
+        cumulative_score = user_risk_history.get_cumulative_score()
+        logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
+        
+        risk_level = get_risk_level(cumulative_score)
         logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
         
-        # 데이터베이스에 위험도 점수 저장
+        # 데이터베이스에 누적 위험도 점수 저장
         try:
-            logger.info(f"[RISK_SAVE] 위험도 점수 저장 시도: score={risk_score}")
-            await update_risk_score(session, user_id, risk_score)
-            logger.info(f"[RISK_SAVE] 위험도 점수 저장 성공: score={risk_score}")
+            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
+            await update_risk_score(session, user_id, cumulative_score)
+            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
         except Exception as e:
-            logger.error(f"[RISK_SAVE] 위험도 점수 저장 실패: score={risk_score}, error={e}")
+            logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
             import traceback
             logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
         
@@ -583,7 +598,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
                     try:
                         await save_log_message(session, "check_response_critical",
-                                            user_id, None,
+                                            user_id, conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -595,7 +610,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 7-8점: 안전 안내 메시지 발송")
                     try:
                         await save_log_message(session, "check_response_high_risk",
-                                            user_id, None,
+                                            user_id, conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -609,7 +624,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 0-6점: 일반 대응 메시지 발송")
                     try:
                         await save_log_message(session, "check_response_normal",
-                                            user_id, None,
+                                            user_id, conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -631,7 +646,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if check_score is None and risk_level in ("critical", "high"):
             try:
                 await save_log_message(session, "risk_trigger",
-                                    user_id, None,
+                                    user_id, conv_id,
                                     x_request_id,
                                     {"level": risk_level, "score": risk_score, "evidence": evidence[:3]})
             except Exception:
@@ -661,8 +676,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: risk_score={risk_score}, should_send={should_send_check_question(risk_score, user_risk_history)}")
 
         # ====== [이름 플로우 처리] ==============================================
-        # 이름 관련 플로우 처리
-        name_response = await handle_name_flow(session, user_id, user_text_stripped, x_request_id)
+        # 이름 관련 플로우 처리 (conv_id 전달)
+        name_response = await handle_name_flow(session, user_id, user_text_stripped, x_request_id, conv_id)
         if name_response:
             return name_response
 
@@ -676,7 +691,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_log_message(session, "request_received", user_id, None, x_request_id, {"callback": True})
+                    await save_log_message(session, "request_received", user_id, conv_id, x_request_id, {"callback": True})
                 except Exception:
                     pass
 
@@ -748,7 +763,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 "useCallback": True
             }
             try:
-                await save_log_message(session, "callback_waiting_sent", user_id, None, x_request_id, None)
+                await save_log_message(session, "callback_waiting_sent", user_id, conv_id, x_request_id, None)
             except Exception:
                 pass
 

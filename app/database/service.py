@@ -467,15 +467,28 @@ async def mark_check_question_sent(session: AsyncSession, user_id: str) -> None:
 async def update_check_response(session: AsyncSession, user_id: str, check_score: int) -> None:
     """체크 질문 응답 점수를 업데이트합니다."""
     try:
+        logger.info(f"[RISK_DB] 체크 응답 업데이트 시작: user_id={user_id}, check_score={check_score}")
+        
         risk_state = await get_or_create_risk_state(session, user_id)
+        logger.info(f"[RISK_DB] RiskState 조회/생성 완료: {risk_state.user_id}")
+        
         risk_state.last_check_score = check_score
         risk_state.check_question_sent = False  # 응답을 받았으므로 리셋
+        logger.info(f"[RISK_DB] 체크 응답 점수 및 상태 업데이트 완료: last_check_score={risk_state.last_check_score}, check_question_sent={risk_state.check_question_sent}")
+        
         try:
             await session.commit()
-        except Exception:
+            logger.info(f"[RISK_DB] 체크 응답 커밋 성공")
+        except Exception as commit_error:
+            logger.error(f"[RISK_DB] 체크 응답 커밋 실패: {commit_error}")
             await session.rollback()
             raise
-    except Exception:
+        
+        await session.refresh(risk_state)
+        logger.info(f"[RISK_DB] RiskState 새로고침 완료: 최종 last_check_score={risk_state.last_check_score}")
+        
+    except Exception as e:
+        logger.error(f"[RISK_DB] update_check_response 전체 실패: {e}")
         try:
             await session.rollback()
         except Exception:
