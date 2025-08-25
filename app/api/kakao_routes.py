@@ -676,7 +676,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_log_message(session, "request_received", user_id, None, x_request_id, {"callback": True})
+                    await save_log_message(session, "request_received", user_id, None, x_request_id, "callback")
                 except Exception:
                     pass
 
