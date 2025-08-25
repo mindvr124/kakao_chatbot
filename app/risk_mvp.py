@@ -35,9 +35,8 @@ P_POSITIVE = re.compile(r"(괜찮아|괜찮|나아졌어|덜\s*힘들|고마워|
 class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
     
-    def __init__(self, max_turns: int = 20, decay_factor: float = 0.8):
+    def __init__(self, max_turns: int = 20):
         self.max_turns = max_turns
-        self.decay_factor = decay_factor  # 시간에 따른 감쇠율
         self.turns: deque = deque(maxlen=max_turns)
         self.last_updated = datetime.now()
         self.check_question_turn_count = 0  # 체크 질문 발동 후 턴 카운트
@@ -73,28 +72,16 @@ class RiskHistory:
         return turn_analysis
     
     def get_cumulative_score(self) -> int:
-        """최근 턴들의 누적 위험도 점수를 계산합니다."""
+        """최근 턴들의 누적 위험도 점수를 계산합니다. 시간 기반 감점 없이 순수 누적만 적용."""
         if not self.turns:
             logger.info(f"[RISK_HISTORY] 누적 점수 계산: 턴이 없음 -> 0")
             return 0
         
-        total_score = 0
-        current_time = datetime.now()
-        
-        logger.info(f"[RISK_HISTORY] 누적 점수 계산 시작: turns_count={len(self.turns)}")
-        
-        for i, turn in enumerate(self.turns):
-            # 시간에 따른 감쇠만 적용 (턴 순서 감소 제거)
-            time_diff = (current_time - turn['timestamp']).total_seconds() / 60  # 분 단위
-            decay = self.decay_factor ** (time_diff / 10)  # 10분마다 decay_factor만큼 감쇠
-            
-            weighted_score = round(turn['score'] * decay)  # int() 대신 round() 사용
-            total_score += weighted_score
-            
-            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, weighted_score={weighted_score} (raw={turn['score'] * decay:.3f})")
-        
+        # 시간 기반 감점 없이 순수 누적 점수만 계산
+        total_score = sum(turn['score'] for turn in self.turns)
         final_score = min(100, total_score)
-        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}, max_score={max(turn['score'] for turn in self.turns) if self.turns else 0}")
+        
+        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}, turns_count={len(self.turns)}")
         return final_score
     
     def get_risk_trend(self) -> str:

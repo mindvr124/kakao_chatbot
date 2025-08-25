@@ -76,16 +76,24 @@ async def get_or_create_conversation(session: AsyncSession, user_id: str) -> Con
         conv: Optional[Conversation] = res.scalar_one_or_none()
 
         if conv is None:
+            # 새 conversation 생성
             conv = Conversation(user_id=user_id)
             session.add(conv)
             try:
                 await session.commit()
-            except Exception:
+                logger.info(f"[CONV] 새 conversation 생성 완료: user_id={user_id}, conv_id={conv.conv_id}")
+            except Exception as commit_err:
+                logger.error(f"[CONV] conversation 생성 커밋 실패: {commit_err}")
                 await session.rollback()
                 raise
             await session.refresh(conv)
+            logger.info(f"[CONV] conversation refresh 완료: conv_id={conv.conv_id}")
+        else:
+            logger.info(f"[CONV] 기존 conversation 사용: conv_id={conv.conv_id}")
+            
         return conv
-    except Exception:
+    except Exception as e:
+        logger.error(f"[CONV] get_or_create_conversation 실패: {e}")
         try:
             await session.rollback()
         except Exception:
@@ -195,16 +203,28 @@ async def save_log_message(
         from app.database.models import LogMessage
         from uuid import UUID
         
+        # conv_id 검증 및 정리
         conv_uuid = None
         try:
-            conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None
-        except Exception:
+            # temp_ 접두사가 있거나 문자열로 변환할 수 없는 경우 None으로 처리
+            if conv_id and isinstance(conv_id, str) and conv_id.startswith("temp_"):
+                conv_uuid = None
+                logger.info(f"[LOG] temp_ 접두사 감지, conv_id를 None으로 설정: {conv_id}")
+            elif conv_id:
+                conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+            else:
+                conv_uuid = None
+        except Exception as conv_error:
+            logger.warning(f"[LOG] conv_id 변환 실패, None으로 설정: {conv_id}, error: {conv_error}")
             conv_uuid = None
             
+        # user_id를 문자열로 변환 (UUID 객체인 경우)
+        user_id_str = str(user_id) if user_id else None
+        
         log_msg = LogMessage(
             level=level,
             message=message,
-            user_id=user_id,
+            user_id=user_id_str,
             conv_id=conv_uuid,
             source=source
         )
@@ -215,6 +235,7 @@ async def save_log_message(
             try:
                 s.add(log_msg)
                 await s.commit()
+                logger.info(f"[LOG] 로그 메시지 저장 성공: level={level}, user_id={user_id_str}, conv_id={conv_uuid}")
                 return True
             except Exception as commit_error:
                 logger.warning(f"save_log_message 커밋 실패: {commit_error}")
@@ -228,6 +249,7 @@ async def save_log_message(
         try:
             session.add(log_msg)
             # 기존 세션은 호출자가 관리하므로 커밋하지 않음
+            logger.info(f"[LOG] fallback으로 기존 세션에 로그 추가: level={level}, user_id={user_id_str}, conv_id={conv_uuid}")
             return True
         except Exception as fallback_error:
             logger.error(f"save_log_message fallback 실패: {fallback_error}")
