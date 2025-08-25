@@ -6,9 +6,12 @@ from sqlalchemy.pool import NullPool
 from app.config import settings
 import logging
 
-# 로깅 설정
-logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
-logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
+# 로깅 설정 - SQL 쿼리 완전 차단
+logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.dialects').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy.orm').setLevel(logging.ERROR)
+logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
 
 # PostgreSQL 데이터베이스 엔진 생성
 def create_database_engine():
@@ -17,6 +20,7 @@ def create_database_engine():
         engine = create_async_engine(
             settings.database_url,
             echo=False,  # SQL 쿼리 에코 완전 차단
+            echo_pool=False,  # 풀 관련 로깅도 차단
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=20,

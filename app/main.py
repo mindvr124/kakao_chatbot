@@ -15,11 +15,12 @@ if os.path.exists(logging_config_path):
     logging.config.fileConfig(logging_config_path, disable_existing_loggers=False)
     logger.info("Logging configuration loaded from logging.ini")
 else:
-    # fallback: SQLAlchemy 로깅 레벨 설정 (쿼리문 안 뜨게)
-    logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
-    logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)
-    logging.getLogger('sqlalchemy.dialects').setLevel(logging.WARNING)
-    logging.getLogger('sqlalchemy.orm').setLevel(logging.WARNING)
+    # fallback: SQLAlchemy 로깅 레벨 설정 (쿼리문 완전 차단)
+    logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)
+    logging.getLogger('sqlalchemy.pool').setLevel(logging.ERROR)
+    logging.getLogger('sqlalchemy.dialects').setLevel(logging.ERROR)
+    logging.getLogger('sqlalchemy.orm').setLevel(logging.ERROR)
+    logging.getLogger('sqlalchemy').setLevel(logging.ERROR)
     logger.warning("logging.ini not found, using fallback logging configuration")
 
 # loguru 설정

@@ -517,7 +517,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # LogMessage에도 저장
         try:
-            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", user_id, None, "skill_endpoint")
+            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), None, "skill_endpoint")
         except Exception:
             pass
 
@@ -610,7 +610,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
                     try:
                         await save_log_message(session, "check_response_critical",
-                                            user_id, conv_id,
+                                            str(user_id), conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -622,7 +622,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 7-8점: 안전 안내 메시지 발송")
                     try:
                         await save_log_message(session, "check_response_high_risk",
-                                            user_id, conv_id,
+                                            str(user_id), conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -636,7 +636,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[CHECK] 위험도 0-6점: 일반 대응 메시지 발송")
                     try:
                         await save_log_message(session, "check_response_normal",
-                                            user_id, conv_id,
+                                            str(user_id), conv_id,
                                             x_request_id,
                                             {"check_score": check_score, "guidance": guidance})
                     except Exception:
@@ -658,7 +658,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if check_score is None and risk_level in ("critical", "high"):
             try:
                 await save_log_message(session, "risk_trigger",
-                                    user_id, conv_id,
+                                    str(user_id), conv_id,
                                     x_request_id,
                                     {"level": risk_level, "score": risk_score, "evidence": evidence[:3]})
             except Exception:
@@ -679,7 +679,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 check_questions = get_check_questions()
                 selected_question = random.choice(check_questions)
                 logger.info(f"[CHECK] 체크 질문 발송: {selected_question}")
-                return JSONResponse(content=kakao_text(selected_question), media_type="application/json; charset=utf-8")
+                return kakao_text(selected_question)
             except Exception as e:
                 logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
                 import traceback
@@ -703,7 +703,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             time_left = max(0.2, 4.5 - elapsed)
             try:
                 try:
-                    await save_log_message(session, "request_received", user_id, conv_id, x_request_id, {"callback": True})
+                    await save_log_message(session, "request_received", str(user_id), conv_id, x_request_id, {"callback": True})
                 except Exception:
                     pass
 
@@ -775,7 +775,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 "useCallback": True
             }
             try:
-                await save_log_message(session, "callback_waiting_sent", user_id, conv_id, x_request_id, None)
+                await save_log_message(session, "callback_waiting_sent", str(user_id), conv_id, x_request_id, None)
             except Exception:
                 pass
 
@@ -1037,7 +1037,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
 
             try:
-                await save_log_message(session, "message_generated", user_id, conv_id, x_request_id, {"tokens": tokens_used})
+                await save_log_message(session, "message_generated", str(user_id), conv_id, x_request_id, {"tokens": tokens_used})
             except Exception:
                 pass
             
