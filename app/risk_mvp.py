@@ -88,13 +88,13 @@ class RiskHistory:
             time_diff = (current_time - turn['timestamp']).total_seconds() / 60  # 분 단위
             decay = self.decay_factor ** (time_diff / 10)  # 10분마다 decay_factor만큼 감쇠
             
-            weighted_score = int(turn['score'] * decay)
+            weighted_score = round(turn['score'] * decay)  # int() 대신 round() 사용
             total_score += weighted_score
             
-            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, weighted_score={weighted_score}")
+            logger.info(f"[RISK_HISTORY] 턴 {i+1}: base_score={turn['score']}, time_diff={time_diff:.1f}분, decay={decay:.3f}, weighted_score={weighted_score} (raw={turn['score'] * decay:.3f})")
         
         final_score = min(100, total_score)
-        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}")
+        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={total_score}, final_score={final_score}, max_score={max(turn['score'] for turn in self.turns) if self.turns else 0}")
         return final_score
     
     def get_risk_trend(self) -> str:
