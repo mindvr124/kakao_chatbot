@@ -299,10 +299,14 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
 def get_check_questions() -> List[str]:
     """체크 질문 목록을 반환합니다."""
     return [
-        "지금 마음 상태를 0~10으로 표현해줄래? 0은 괜찮음, 10은 당장 위험한 상태야.",
-        "너무 힘들어 보여서 확인하고 싶어. 0은 괜찮음, 10은 많이 위험한 상태야.",
-        "네가 얼마나 힘든지 알고 싶어. 숫자로 말해줄래? (0=안정, 10=위험)"
+        "지금 마음 상태를 0~10으로 표현해줄래? (0=괜찮음, 10=당장 위험한 상태)",
+        "너무 힘들어 보여서 확인하고 싶어. 0~10으로 표현해줘. (0=안정, 10=매우 위험)",
+        "네가 얼마나 힘든지 알고 싶어. 0~10으로 말해줘. (0=괜찮음, 10=위험)"
     ]
+
+def get_invalid_score_message() -> str:
+    """잘못된 점수 입력에 대한 재질문 메시지를 반환합니다."""
+    return "0부터 10까지의 정수만 입력해줘~"
 
 def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""
@@ -310,14 +314,27 @@ def parse_check_response(text: str) -> Optional[int]:
     
     logger.info(f"[PARSE_DEBUG] 체크 응답 파싱 시작: text='{text}'")
     
-    # 숫자만 추출 (0-10 범위)
-    numbers = re.findall(r'\b([0-9]|10)\b', text)
+    # 입력 텍스트 정리 (공백 제거, 소문자 변환)
+    text_clean = text.strip().lower()
+    
+    # 정확히 0~10 범위의 정수만 매칭 (단독 숫자 또는 숫자만 포함된 텍스트)
+    # 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10만 허용
+    exact_match = re.match(r'^(0|1|2|3|4|5|6|7|8|9|10)$', text_clean)
+    
+    if exact_match:
+        score = int(exact_match.group())
+        logger.info(f"[PARSE_DEBUG] 정확한 점수 매칭: {score}")
+        return score
+    
+    # 숫자만 추출하여 확인 (fallback)
+    numbers = re.findall(r'\b([0-9]|10)\b', text_clean)
     logger.info(f"[PARSE_DEBUG] 정규식 매칭 결과: {numbers}")
     
     if numbers:
         score = int(numbers[0])
         logger.info(f"[PARSE_DEBUG] 추출된 점수: {score}")
         
+        # 0~10 범위 검증
         if 0 <= score <= 10:
             logger.info(f"[PARSE_DEBUG] 유효한 점수 확인: {score}")
             return score

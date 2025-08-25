@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from collections import defaultdict
 from typing import Optional, Dict
 
-from app.risk_mvp import calculate_risk_score, should_send_check_question, get_check_questions, parse_check_response, get_risk_level, RiskHistory, get_check_response_message, get_check_response_guidance
+from app.risk_mvp import calculate_risk_score, should_send_check_question, get_check_questions, parse_check_response, get_risk_level, RiskHistory, get_check_response_message, get_check_response_guidance, get_invalid_score_message
 from app.database.db import get_session
 from app.schemas.schemas import simple_text, callback_waiting_response
 from app.database.service import upsert_user, get_or_create_conversation, save_message, save_log_message, get_or_create_risk_state, update_risk_score, mark_check_question_sent, update_check_response
@@ -677,7 +677,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         pass
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
-                    return JSONResponse(content=kakao_text(response_message), media_type="application/json; charset=utf-8")
+                    return kakao_text(response_message)
                 
                 # 0-6점: 일반 대응 메시지 후 정상 대화 진행
                 else:
@@ -696,7 +696,24 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 import traceback
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
         else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
+            # 체크 질문 응답이 아니거나 유효하지 않은 경우
+            # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우 재질문
+            if user_risk_history.check_question_turn_count > 0:
+                logger.info(f"[CHECK] 유효하지 않은 체크 응답: '{user_text_stripped}' -> 재질문")
+                try:
+                    # conv_id가 유효한 경우에만 전달
+                    safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
+                    await save_log_message(session, "check_response_invalid",
+                                        f"Invalid check response: '{user_text_stripped}'", str(user_id), safe_conv_id,
+                                        {"source": "check_response", "invalid_input": user_text_stripped, "x_request_id": x_request_id})
+                except Exception:
+                    pass
+                
+                # 재질문 메시지 반환
+                invalid_message = get_invalid_score_message()
+                return kakao_text(invalid_message)
+            else:
+                logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
 
         # ====== [체크 질문 발송 및 위험도 처리] ==============================================
         # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
