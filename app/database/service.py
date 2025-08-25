@@ -187,7 +187,7 @@ async def save_log_message(
     level: str,
     message: str,
     user_id: str | None = None,
-    conv_id = None,
+    conv_id: UUID | str | None = None,
     source: Any | None = None,
 ) -> bool:
     """로그 메시지를 저장합니다. 별도 세션을 사용하여 기존 트랜잭션과 충돌하지 않습니다."""

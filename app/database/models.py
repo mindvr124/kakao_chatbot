@@ -6,6 +6,7 @@ from uuid import uuid4, UUID
 import enum as pyenum
 from sqlalchemy import Enum as SAEnum, Column
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.mutable import MutableDict
 
 class MessageRole(str, pyenum.Enum):
     USER = "user"
@@ -92,9 +93,9 @@ class LogMessage(SQLModel, table=True):
     message: str
     user_id: str = Field(default=None, index=True)  # str 타입으로 통일
     conv_id: UUID = Field(default=None, foreign_key="conversation.conv_id", index=True)
-    source: LogSource = Field(
+    source: Optional[Dict[str, Any]] = Field(
         default=None,
-        sa_column=Column(SAEnum(LogSource, name="log_source", native_enum=False), nullable=True)
+        sa_column=Column(MutableDict.as_mutable(JSONB))
     )
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None), index=True)
 
