@@ -698,6 +698,31 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         else:
             logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
 
+        # ====== [체크 질문 발송 및 위험도 처리] ==============================================
+        # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
+        if check_score is None and should_send_check_question(cumulative_score, user_risk_history):
+            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: cumulative_score={cumulative_score}")
+            try:
+                # RiskHistory에 체크 질문 발송 기록
+                user_risk_history.mark_check_question_sent()
+                logger.info(f"[CHECK] RiskHistory에 체크 질문 발송 기록 완료")
+                
+                # 데이터베이스에도 기록 (user_id를 문자열로 변환)
+                user_id_str = str(user_id) if user_id else "unknown"
+                await mark_check_question_sent(session, user_id_str)
+                logger.info(f"[CHECK] 데이터베이스에 체크 질문 발송 기록 완료")
+                
+                check_questions = get_check_questions()
+                selected_question = random.choice(check_questions)
+                logger.info(f"[CHECK] 체크 질문 발송: {selected_question}")
+                return kakao_text(selected_question)
+            except Exception as e:
+                logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
+                import traceback
+                logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
+        elif check_score is None:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}, should_send={should_send_check_question(cumulative_score, user_risk_history)}")
+
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
             try:
@@ -727,30 +752,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
             # 안전 응답 반환
             return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
-
-        # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
-        if check_score is None and should_send_check_question(risk_score, user_risk_history):
-            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: risk_score={risk_score}")
-            try:
-                # RiskHistory에 체크 질문 발송 기록
-                user_risk_history.mark_check_question_sent()
-                logger.info(f"[CHECK] RiskHistory에 체크 질문 발송 기록 완료")
-                
-                # 데이터베이스에도 기록 (user_id를 문자열로 변환)
-                user_id_str = str(user_id) if user_id else "unknown"
-                await mark_check_question_sent(session, user_id_str)
-                logger.info(f"[CHECK] 데이터베이스에 체크 질문 발송 기록 완료")
-                
-                check_questions = get_check_questions()
-                selected_question = random.choice(check_questions)
-                logger.info(f"[CHECK] 체크 질문 발송: {selected_question}")
-                return kakao_text(selected_question)
-            except Exception as e:
-                logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
-                import traceback
-                logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
-        elif check_score is None:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: risk_score={risk_score}, should_send={should_send_check_question(risk_score, user_risk_history)}")
 
         # ====== [이름 플로우 처리] ==============================================
         # 이름 관련 플로우 처리 (conv_id 전달)

@@ -41,33 +41,27 @@ class RiskHistory:
         self.last_updated = datetime.now()
         self.check_question_turn_count = 0  # 체크 질문 발동 후 턴 카운트
     
-    def add_turn(self, text: str, timestamp: datetime = None) -> Dict:
+    def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
-        if timestamp is None:
-            timestamp = datetime.now()
+        # 체크 질문 발송 후 턴 카운트 증가
+        if self.check_question_turn_count > 0:
+            self.check_question_turn_count += 1
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 증가: {self.check_question_turn_count}")
         
-        # 현재 턴 분석
         turn_analysis = self._analyze_single_turn(text)
         
-        # 턴 정보 저장
         turn_data = {
             'text': text,
-            'timestamp': timestamp,
+            'timestamp': datetime.now(),
             'score': turn_analysis['score'],
             'flags': turn_analysis['flags'],
             'evidence': turn_analysis['evidence']
         }
         
-        logger.info(f"[RISK_HISTORY] 턴 추가: text='{text[:30]}...', score={turn_analysis['score']}, turns_before={len(self.turns)}")
-        
         self.turns.append(turn_data)
-        self.last_updated = timestamp
+        self.last_updated = datetime.now()
         
-        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, total_score={self.get_cumulative_score()}")
-        
-        # 체크 질문 발동 후 턴 카운트 증가
-        if self.check_question_turn_count > 0:
-            self.check_question_turn_count += 1
+        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, total_score={turn_analysis['score']}")
         
         return turn_analysis
     
