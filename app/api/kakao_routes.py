@@ -546,9 +546,13 @@ async def skill_endpoint(
         
         # 데이터베이스에 위험도 점수 저장
         try:
+            logger.info(f"[RISK_SAVE] 위험도 점수 저장 시도: user_id={user_id}, score={risk_score}")
             await update_risk_score(session, user_id, risk_score)
+            logger.info(f"[RISK_SAVE] 위험도 점수 저장 성공: user_id={user_id}, score={risk_score}")
         except Exception as e:
-            logger.warning(f"위험도 점수 저장 실패: {e}")
+            logger.error(f"[RISK_SAVE] 위험도 점수 저장 실패: user_id={user_id}, score={risk_score}, error={e}")
+            import traceback
+            logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
         
         # 위험도 추세 분석
         risk_trend = user_risk_history.get_risk_trend()

@@ -6,6 +6,10 @@ from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
 from loguru import logger
+from zoneinfo import ZoneInfo
+import logging
+
+logger = logging.getLogger(__name__)
 
 async def get_user_name(session: AsyncSession, user_id: str) -> str | None:
     """사용자 이름을 조회합니다. 없으면 None을 반환합니다."""
@@ -401,18 +405,46 @@ async def get_latest_ai_response(session: AsyncSession, conv_id: UUID) -> str | 
 async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskState:
     """사용자의 위험도 상태를 조회하거나 생성합니다."""
     try:
+        logger.info(f"[RISK_DB] get_or_create_risk_state 시작: user_id={user_id}")
+        
+        # 먼저 AppUser가 존재하는지 확인하고, 없다면 생성
+        user = await session.get(AppUser, user_id)
+        if not user:
+            logger.info(f"[RISK_DB] AppUser가 존재하지 않음, 새로 생성: {user_id}")
+            user = AppUser(user_id=user_id)
+            session.add(user)
+            try:
+                await session.commit()
+                await session.refresh(user)
+                logger.info(f"[RISK_DB] AppUser 생성 완료: {user_id}")
+            except Exception as user_error:
+                logger.error(f"[RISK_DB] AppUser 생성 실패: {user_error}")
+                await session.rollback()
+                raise
+        else:
+            logger.info(f"[RISK_DB] AppUser 이미 존재: {user_id}")
+        
+        # RiskState 조회 또는 생성
         risk_state = await session.get(RiskState, user_id)
         if not risk_state:
+            logger.info(f"[RISK_DB] RiskState가 존재하지 않음, 새로 생성: {user_id}")
             risk_state = RiskState(user_id=user_id, score=0)
             session.add(risk_state)
             try:
                 await session.commit()
-            except Exception:
+                logger.info(f"[RISK_DB] RiskState 생성 완료: {user_id}")
+            except Exception as risk_error:
+                logger.error(f"[RISK_DB] RiskState 생성 실패: {risk_error}")
                 await session.rollback()
                 raise
             await session.refresh(risk_state)
+        else:
+            logger.info(f"[RISK_DB] RiskState 이미 존재: {user_id}, score={risk_state.score}")
+        
         return risk_state
-    except Exception:
+        
+    except Exception as e:
+        logger.error(f"[RISK_DB] get_or_create_risk_state 전체 실패: {e}")
         try:
             await session.rollback()
         except Exception:
@@ -422,17 +454,29 @@ async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskS
 async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> RiskState:
     """사용자의 위험도 점수를 업데이트합니다."""
     try:
+        logger.info(f"[RISK_DB] 위험도 점수 업데이트 시작: user_id={user_id}, score={score}")
+        
         risk_state = await get_or_create_risk_state(session, user_id)
+        logger.info(f"[RISK_DB] RiskState 조회/생성 완료: {risk_state.user_id}")
+        
         risk_state.score = score
-        risk_state.last_updated = datetime.now()
+        risk_state.last_updated = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+        logger.info(f"[RISK_DB] 점수 및 시간 업데이트 완료: score={risk_state.score}, last_updated={risk_state.last_updated}")
+        
         try:
             await session.commit()
-        except Exception:
+            logger.info(f"[RISK_DB] 커밋 성공")
+        except Exception as commit_error:
+            logger.error(f"[RISK_DB] 커밋 실패: {commit_error}")
             await session.rollback()
             raise
+        
         await session.refresh(risk_state)
+        logger.info(f"[RISK_DB] RiskState 새로고침 완료: 최종 score={risk_state.score}")
         return risk_state
-    except Exception:
+        
+    except Exception as e:
+        logger.error(f"[RISK_DB] update_risk_score 전체 실패: {e}")
         try:
             await session.rollback()
         except Exception:
