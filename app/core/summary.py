@@ -52,21 +52,23 @@ async def generate_summary(llm_or_client, history: str, summary_text: str, user_
         # Async 여부 구별
         if hasattr(create_fn, "create"):
             # async client
+            from app.config import settings
             resp = await llm_or_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.2,
-                max_tokens=300,
+                max_tokens=settings.openai_summary_max_tokens,  # 설정에서 동적으로 가져오기
             )
             content = resp.choices[0].message.content
             return SummaryResponse(content)
         else:
             # sync client (fallback)
+            from app.config import settings
             resp = llm_or_client.chat.completions.create(
                 model="gpt-4o",
                 messages=messages,
                 temperature=0.2,
-                max_tokens=300,
+                max_tokens=settings.openai_summary_max_tokens,  # 설정에서 동적으로 가져오기
             )
             content = resp.choices[0].message.content
             return SummaryResponse(content)

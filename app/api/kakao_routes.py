@@ -64,6 +64,19 @@ MAX_SIMPLETEXT = 900
 MAX_OUTPUTS = 3
 SENT_ENDERS = ("...", "…", ".", "!", "?", "。", "！", "？")
 
+# 점수별 프롬프트 매핑
+RISK_PROMPT_MAPPING = {
+    "critical": "risk_critical",      # 9-10점: 위험도 높음
+    "high": "risk_high",             # 7-8점: 위험도 중간
+    "medium": "risk_medium",         # 4-6점: 위험도 보통
+    "low": "risk_low",               # 1-3점: 위험도 낮음
+    "safe": "risk_safe"              # 0점: 안전
+}
+
+def get_risk_based_prompt(risk_level: str) -> str:
+    """위험도 레벨에 따른 프롬프트 이름을 반환합니다."""
+    return RISK_PROMPT_MAPPING.get(risk_level, "default")
+
 # 웰컴 메시지 목록
 _WELCOME_MESSAGES = [
     "안녕하세요! 무엇을 도와드릴까요?",
@@ -243,7 +256,7 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     session=s,
                     conv_id=conv_id_value,
                     user_input=user_text,
-                    prompt_name="default",
+                    prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
                     user_id=user_id
                 )
                 await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
@@ -296,7 +309,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                 session=session,
                 conv_id=quick_conv_id,
                 user_input=user_text,
-                prompt_name="default",
+                prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
                 user_id=user_id
             ),
             timeout=time_left,
@@ -675,7 +688,7 @@ async def handle_name_flow(
                     session=session,
                     conv_id=conv.conv_id,
                     user_input=user_text,
-                    prompt_name="default",
+                    prompt_name="default",  # 이름 플로우에서는 기본 프롬프트 사용
                     user_id=user_id
                 )
                 
@@ -1123,6 +1136,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         ENABLE_CALLBACK = True
 
+        # 위험도 기반 프롬프트 선택
+        risk_based_prompt = get_risk_based_prompt(risk_level)
+        logger.info(f"[PROMPT] 위험도 기반 프롬프트 선택: {risk_level} -> {risk_based_prompt}")
+
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)
 
@@ -1164,7 +1181,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         session=session,
                         conv_id=conv_id,
                         user_input=user_text,
-                        prompt_name="default",
+                        prompt_name=risk_based_prompt,
                         user_id=user_id
                     ),
                     timeout=AI_GENERATION_TIMEOUT,

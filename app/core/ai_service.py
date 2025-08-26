@@ -247,16 +247,36 @@ class AIService:
             except Exception:
                 pass
 
-            # 동적 max_tokens 설정
-            max_tokens = self.max_tokens
-            if settings.openai_dynamic_max_tokens:
-                try:
-                    # 매우 단순한 휴리스틱: 입력 길이 기반 스케일링
-                    user_len = sum(len(m.get("content") or "") for m in messages)
-                    scaled = min(settings.openai_dynamic_max_tokens_cap, max(self.max_tokens, int(user_len * 0.1)))
-                    max_tokens = scaled
-                except Exception:
-                    pass
+            # 요약 vs 채팅 구분하여 토큰 설정
+            is_summary_request = (
+                any("요약" in msg.get("content", "") for msg in messages) or 
+                "summary" in prompt_name.lower() or
+                any("롤업" in msg.get("content", "") for msg in messages) or
+                any("병합" in msg.get("content", "") for msg in messages) or
+                any("중복 없이" in msg.get("content", "") for msg in messages)
+            )
+            
+            if is_summary_request:
+                # 요약용 토큰 설정 (완전한 요약 보장)
+                max_tokens = settings.openai_summary_max_tokens
+                auto_continue = settings.openai_summary_auto_continue
+                max_segments = settings.openai_summary_auto_continue_max_segments
+                logger.info(f"요약 요청 감지: max_tokens={max_tokens}, auto_continue={auto_continue}, max_segments={max_segments}")
+            else:
+                # 채팅용 토큰 설정 (적당한 길이 유지)
+                max_tokens = self.max_tokens
+                auto_continue = settings.openai_auto_continue
+                max_segments = settings.openai_auto_continue_max_segments
+                
+                # 동적 max_tokens 설정 (채팅만)
+                if settings.openai_dynamic_max_tokens:
+                    try:
+                        # 매우 단순한 휴리스틱: 입력 길이 기반 스케일링
+                        user_len = sum(len(m.get("content") or "") for m in messages)
+                        scaled = min(settings.openai_dynamic_max_tokens_cap, max(self.max_tokens, int(user_len * 0.1)))
+                        max_tokens = scaled
+                    except Exception:
+                        pass
 
             # 1차 호출
             response = await self.client.chat.completions.create(
@@ -280,7 +300,7 @@ class AIService:
             accumulated = content
             segments = 0
             last_resp = response
-            while settings.openai_auto_continue and _is_truncated(last_resp) and segments < settings.openai_auto_continue_max_segments:
+            while auto_continue and _is_truncated(last_resp) and segments < max_segments:
                 segments += 1
                 follow_messages = messages + [
                     {"role": "assistant", "content": accumulated[-2000:]},
