@@ -1,27 +1,378 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+import asyncio
+import json
+import random
+import time
+import traceback
+from datetime import datetime
+from typing import Optional
+
+import httpx
+import urllib.request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
-from collections import defaultdict
-from typing import Optional, Dict
 
-from app.risk_mvp import calculate_risk_score, should_send_check_question, get_check_questions, parse_check_response, get_risk_level, RiskHistory, get_check_response_message, get_check_response_guidance, get_invalid_score_message
-from app.database.db import get_session
-from app.schemas.schemas import simple_text, callback_waiting_response
-from app.database.service import upsert_user, get_or_create_conversation, save_message, save_log_message, get_or_create_risk_state, update_risk_score, mark_check_question_sent, update_check_response
-from app.database.models import AppUser
-from app.utils.utils import extract_user_id, extract_callback_url, remove_markdown
+from app.api.schemas.schemas import (
+    ConversationCreate,
+    ConversationResponse,
+    MessageCreate,
+    MessageResponse,
+    UserCreate,
+    UserResponse,
+)
 from app.core.ai_service import ai_service
-from app.core.background_tasks import _save_user_message_background, _save_ai_response_background, update_last_activity, _send_callback_response
-from app.core.summary import maybe_rollup_user_summary
-from app.main import BUDGET, ENABLE_CALLBACK
-import time
-import asyncio
-from datetime import datetime
+from app.core.background_tasks import (
+    maybe_rollup_user_summary,
+    update_last_activity,
+)
+from app.database.db import get_session
+from app.database.models import Conversation, Message, User
+from app.database.service import (
+    get_conversation,
+    get_conversations,
+    get_messages,
+    get_user,
+    get_users,
+    mark_check_question_sent,
+    save_log_message,
+    update_check_response,
+    update_risk_score,
+    upsert_user,
+)
+from app.utils.utils import (
+    extract_callback_url,
+    extract_user_id,
+    get_or_create_conversation,
+    remove_markdown,
+    save_message,
+)
+from app.risk_mvp import (
+    calculate_risk_score,
+    should_send_check_question,
+    get_check_questions,
+    parse_check_response,
+    get_risk_level,
+    RiskHistory,
+    get_check_response_message,
+    get_check_response_guidance,
+    get_invalid_score_message,
+)
+
+# 상수 정의
+CHECK_QUESTION_TURN_COUNT = 20
+CALLBACK_TIMEOUT = 4.5
+AI_GENERATION_TIMEOUT = 1.5
+MAX_SIMPLETEXT = 900
+MAX_OUTPUTS = 3
+SENT_ENDERS = ("...", "…", ".", "!", "?", "。", "！", "？")
+
+# 웰컴 메시지 목록
+_WELCOME_MESSAGES = [
+    "안녕하세요! 무엇을 도와드릴까요?",
+    "반갑습니다! 어떤 이야기를 나누고 싶으신가요?",
+    "안녕하세요! 오늘은 어떤 도움이 필요하신가요?",
+    "반갑습니다! 편하게 이야기해주세요.",
+    "안녕하세요! 무엇이든 물어보세요."
+]
+
+# 콜백 처리 유틸리티 함수들
+def _hard_wrap_sentence(s: str, limit: int) -> list[str]:
+    """한 문장이 limit보다 길면 최대한 공백/줄바꿈 기준으로 부드럽게 쪼갠다."""
+    out = []
+    u = s.strip()
+    while len(u) > limit:
+        # 선호도: 줄바꿈 > 공백 > 하드컷
+        cut = u.rfind("\n", 0, limit)
+        if cut < int(limit * 0.6):
+            cut = u.rfind(" ", 0, limit)
+        if cut == -1:
+            cut = limit
+        out.append(u[:cut].rstrip())
+        u = u[cut:].lstrip()
+    if u:
+        out.append(u)
+    return out
+
+def split_for_kakao_sentence_safe(text: str, limit: int = MAX_SIMPLETEXT) -> list[str]:
+    """
+    - 문장 끝(., !, ?, …, 全角句点 등) 또는 빈 줄/줄바꿈 경계를 우선으로 분할
+    - 문장이 limit보다 길면 그 문장만 부드럽게 하드랩
+    """
+    t = remove_markdown(text or "").replace("\r\n", "\n").strip()
+
+    chunks = []
+    i, n = 0, len(t)
+
+    while i < n:
+        end = min(i + limit, n)
+        window = t[i:end]
+
+        if end < n:
+            # 1) 문장부호 경계 찾기
+            cand = -1
+            for p in SENT_ENDERS:
+                pos = window.rfind(p)
+                cand = max(cand, pos)
+
+            # 2) 문장부호가 너무 앞이면(=너무 작게 잘릴 위험) 줄바꿈/공백 경계도 고려
+            nl_pos    = window.rfind("\n")
+            space_pos = window.rfind(" ")
+
+            boundary = cand
+            if boundary < int(limit * 0.4):
+                boundary = max(boundary, nl_pos, space_pos)
+
+            # 3) 경계가 없으면 하드컷
+            if boundary == -1:
+                boundary = len(window)
+            else:
+                boundary += 1  # 경계 문자 포함
+
+        else:
+            boundary = len(window)
+
+        piece = window[:boundary].rstrip()
+
+        # 만약 "한 문장" 자체가 limit보다 긴 경우엔 부드럽게 랩
+        if len(piece) == boundary and (end < n) and boundary == len(window):
+            # window 안에 경계가 전혀 없어서 통째로 잘린 케이스
+            chunks.extend(_hard_wrap_sentence(piece, limit))
+        else:
+            if not piece:  # 빈 조각 방지
+                piece = t[i:end].strip()
+            if piece:
+                chunks.append(piece)
+
+        i += len(piece)
+        # 경계 이후의 공백/개행 정리
+        while i < n and t[i] in (" ", "\n"):
+            i += 1
+
+    return [c for c in chunks if c]
+
+def pack_into_max_outputs(parts: list[str], limit: int, max_outputs: int) -> list[str]:
+    """
+    이미 limit 이하로 분할된 parts를, 개수를 줄이기 위해 앞에서부터
+    가능한 만큼 합치되 각 조각이 limit를 넘지 않게 그리디로 포장.
+    """
+    if len(parts) <= max_outputs:
+        return parts
+
+    packed = []
+    cur = ""
+    for p in parts:
+        if not cur:
+            cur = p
+            continue
+        if len(cur) + 1 + len(p) <= limit:
+            cur = f"{cur}\n{p}"
+        else:
+            packed.append(cur)
+            cur = p
+    if cur:
+        packed.append(cur)
+
+    # 그래도 많으면 맨 뒤를 잘라내는 대신, 마지막 아이템에 안내 메시지 추가
+    if len(packed) > max_outputs:
+        keep = packed[:max_outputs-1]
+        keep.append("※ 내용이 길어 일부만 보냈어. '자세히'라고 보내면 이어서 보여줄게!")
+        return keep
+    return packed
+
+async def _send_callback_response(callback_url: str, text: str, tokens_used: int, request_id: str | None):
+    """콜백 URL로 응답을 전송합니다."""
+    if not callback_url or not isinstance(callback_url, str) or not callback_url.startswith("http"):
+        logger.bind(x_request_id=request_id).error(f"Invalid callback_url: {callback_url!r}")
+        return
+
+    parts = split_for_kakao_sentence_safe(text, MAX_SIMPLETEXT)
+    parts = pack_into_max_outputs(parts, MAX_SIMPLETEXT, MAX_OUTPUTS)
+    outputs = [{"simpleText": {"text": p}} for p in parts]
+    
+    payload = {
+        "version": "2.0",
+        "template": {"outputs": outputs},
+        "useCallback": True
+    }
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+
+    # 1) httpx 우선 시도 (에러시 본문도 로깅)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(callback_url, json=payload, headers=headers)
+            if resp.status_code >= 400:
+                logger.error(f"Callback post failed via httpx: {resp.status_code} {resp.reason_phrase} | body={resp.text}")
+            resp.raise_for_status()
+            return
+    except Exception as e:
+        logger.exception(f"Callback post failed via httpx: {e}")
+
+    # 2) urllib 백업 시도 (동일 payload)
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(callback_url, data=data, headers=headers, method="POST")
+        # 블로킹이라 스레드로
+        def _post_blocking():
+            with urllib.request.urlopen(req, timeout=3) as r:
+                status = r.status
+                if status >= 400:
+                    raise RuntimeError(f"urllib callback HTTP {status}")
+                return status
+        status = await asyncio.to_thread(_post_blocking)
+        logger.info(f"Callback posted via urllib, status={status}")
+    except Exception as e:
+        logger.exception(f"Callback post failed via urllib: {e}")
+
+async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
+    """콜백을 통한 전체 응답 처리를 담당합니다."""
+    final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
+    tokens_used: int = 0
+    try:
+        async for s in get_session():
+            try:
+                async def _ensure_conv():
+                    await upsert_user(s, user_id)
+                    return await get_or_create_conversation(s, user_id)
+                conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
+                conv_id_value = str(conv.conv_id)
+                try:
+                    if user_text:
+                        await save_message(s, conv_id_value, "user", user_text, request_id, None, user_id)
+                except Exception as save_user_err:
+                    logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
+
+                final_text, tokens_used = await ai_service.generate_response(
+                    session=s,
+                    conv_id=conv_id_value,
+                    user_input=user_text,
+                    prompt_name="default",
+                    user_id=user_id
+                )
+                await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
+                try:
+                    await save_log_message(s, "callback_final_sent", f"Callback final sent: {len(final_text)} chars", str(user_id), conv_id_value, {"tokens": tokens_used, "request_id": request_id})
+                except Exception as log_err:
+                    logger.warning(f"Callback log save failed: {log_err}")
+                try:
+                    await maybe_rollup_user_summary(s, user_id, conv_id_value)
+                except Exception as summary_err:
+                    logger.warning(f"User summary rollup failed: {summary_err}")
+                break
+            except Exception as inner_e:
+                logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
+                break
+
+        try:
+            await _send_callback_response(callback_url, final_text, tokens_used, request_id)
+        except Exception as post_err:
+            logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
+    except Exception as e:
+        logger.bind(x_request_id=request_id).exception(f"Callback flow failed: {e}")
+
+async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: str, callback_url: str, conv_id: str, x_request_id: str):
+    """콜백 플로우를 처리합니다."""
+    time_left = max(0.2, CALLBACK_TIMEOUT - 0.5)
+    
+    # 빠른 응답 시도
+    try:
+        # 로그 저장
+        safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
+        try:
+            await save_log_message(session, "request_received", "Request received from callback", str(user_id), safe_conv_id, {"source": "callback", "callback": True, "x_request_id": x_request_id})
+        except Exception as log_err:
+            logger.warning(f"Callback log save failed: {log_err}")
+
+        # 빠른 대화 생성
+        try:
+            quick_conv_id = await asyncio.wait_for(
+                get_or_create_conversation(session, user_id), 
+                timeout=min(1.0, time_left - 0.1)
+            )
+            quick_conv_id = quick_conv_id.conv_id
+        except Exception:
+            quick_conv_id = f"temp_{user_id}"
+
+        # 빠른 AI 응답 생성
+        quick_text, quick_tokens = await asyncio.wait_for(
+            ai_service.generate_response(
+                session=session,
+                conv_id=quick_conv_id,
+                user_input=user_text,
+                prompt_name="default",
+                user_id=user_id
+            ),
+            timeout=time_left,
+        )
+
+        # 백그라운드에서 메시지 저장
+        async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
+            async for s in get_session():
+                try:
+                    await upsert_user(s, user_id)
+                    conv = await get_or_create_conversation(s, user_id)
+                    try:
+                        await save_message(s, conv.conv_id, "user", user_text, request_id, None, user_id)
+                        await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), request_id, quick_tokens, user_id)
+                    except Exception:
+                        try:
+                            await s.rollback()
+                        except Exception:
+                            pass
+                        raise
+                    try:
+                        await maybe_rollup_user_summary(s, user_id, conv.conv_id)
+                    except Exception:
+                        pass
+                    break
+                except Exception as persist_err:
+                    try:
+                        await s.rollback()
+                    except Exception:
+                        pass
+                    logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
+                    break
+
+        asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
+
+        try:
+            update_last_activity(quick_conv_id)
+        except Exception:
+            pass
+            
+        return JSONResponse(content={
+            "version": "2.0",
+            "template": {"outputs":[{"simpleText":{"text": remove_markdown(quick_text)}}]}
+        }, media_type="application/json; charset=utf-8")
+        
+    except Exception:
+        pass
+
+    # 시간 내 미완료시 즉시 콜백 대기 응답 반환
+    immediate = {
+        "version": "2.0",
+        "template": {"outputs":[{"simpleText":{"text":"답변을 생성 중입니다..."}}]},
+        "useCallback": True
+    }
+    
+    try:
+        safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
+        await save_log_message(session, "callback_waiting_sent", "Callback waiting sent", str(user_id), safe_conv_id, {"source": "callback", "x_request_id": x_request_id})
+    except Exception as log_err:
+        logger.warning(f"Callback waiting log save failed: {log_err}")
+
+    # 백그라운드에서 전체 응답 처리
+    asyncio.create_task(_handle_callback_full(callback_url, user_id, user_text, x_request_id))
+
+    try:
+        update_last_activity(f"temp_{user_id}")
+    except Exception:
+        pass
+        
+    return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
 
 """카카오 스킬 관련 라우터"""
 import asyncio
-import random
 import re
 
 # 이름 추출을 위한 정규식 패턴들
@@ -191,7 +542,7 @@ def kakao_text(text: str) -> JSONResponse:
     )
 
 # 사용자별 위험도 히스토리 관리
-_RISK_HISTORIES: Dict[str, RiskHistory] = {}
+_RISK_HISTORIES: dict[str, RiskHistory] = {}
 
 async def handle_name_flow(
     session: AsyncSession, 
@@ -294,8 +645,8 @@ async def handle_name_flow(
                 PendingNameCache.clear(user_id)
                 try:
                     await save_log_message(session, "name_wait_cancel", "Name wait cancelled", str(user_id), None, {"x_request_id": x_request_id})
-                except Exception:
-                    pass
+                except Exception as log_err:
+                    logger.warning(f"Name wait cancel log save failed: {log_err}")
                 return kakao_text("좋아, 다음에 다시 알려줘!")
             
             # 이름 변경 처리 (기존 사용자 + 새 사용자 모두)
@@ -308,8 +659,8 @@ async def handle_name_flow(
                 PendingNameCache.clear(user_id)
                 try:
                     await save_log_message(session, "name_saved", f"Name saved: {cand}", str(user_id), None, {"name": cand, "mode": "ai_name_request", "x_request_id": x_request_id})
-                except Exception:
-                    pass
+                except Exception as log_err:
+                    logger.warning(f"Name saved log save failed: {log_err}")
                 return kakao_text(f"이름 예쁘다! 앞으로는 '{cand}'(이)라고 불러줄게~")
             except Exception as name_err:
                 logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
@@ -350,8 +701,8 @@ async def handle_name_flow(
                             "ai_response": ai_response[:200],
                             "x_request_id": x_request_id
                         })
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.warning(f"Name change request log save failed: {log_err}")
                     
                     # AI 응답을 데이터베이스에 저장 (중복 저장 방지)
                     try:
@@ -490,19 +841,11 @@ def _safe_reply_kakao(risk_level: str) -> dict:
 @router.post("/skill/")
 async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_session)):
     """카카오 스킬 메인 엔드포인트"""
-    logger.info("=== SKILL ENDPOINT STARTED ===")
-    
     # X-Request-ID 추출 (로깅용)
-    x_request_id = request.headers.get("X-Request-ID", "unknown")
+    x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
     logger.bind(x_request_id=x_request_id).info("Skill endpoint started")
     
     try:
-        # 1) 헤더 추적자
-        x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
-        logger.bind(x_request_id=x_request_id).info("Skill request received")
-
-        # 전체 요청 시간 추적 (카카오 5초 제한 준수)
-        t0 = time.perf_counter()
 
         try:
             body_dict = await request.json()
@@ -511,9 +854,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         except Exception as parse_err:
             logger.warning(f"JSON parse failed: {parse_err}")
             body_dict = {}
-        
-        # 서버가 받은 데이터 로깅
-        logger.bind(x_request_id=x_request_id).info("Request body received")
         
         user_id = extract_user_id(body_dict)
         logger.bind(x_request_id=x_request_id).info(f"Extracted user_id: {user_id}")
@@ -527,9 +867,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         callback_url = extract_callback_url(body_dict)
         logger.bind(x_request_id=x_request_id).info("Callback URL extracted")
 
-        # 2) 사용자 발화 추출
+        # 사용자 발화 추출
         user_text = (body_dict.get("userRequest") or {}).get("utterance", "")
-        trace_id = x_request_id
         if not isinstance(user_text, str):
             user_text = str(user_text or "")
         if not user_text:
@@ -542,22 +881,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             conv = await get_or_create_conversation(session, user_id)
             conv_id = conv.conv_id
             logger.info(f"[CONV] 대화 세션 생성/조회 완료: conv_id={conv_id}")
-            
-            # 이제 conv_id가 확보된 후에 로그 저장
-            try:
-                await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), conv_id, {"source": "skill_endpoint"})
-            except Exception:
-                pass
-                
         except Exception as e:
             logger.warning(f"[CONV] 대화 세션 생성 실패: {e}")
             conv_id = None
-            
-            # conv_id가 없는 경우에도 로그 저장 (conv_id=None으로)
-            try:
-                await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), None, {"source": "skill_endpoint"})
-            except Exception:
-                pass
+        
+        # 로그 저장 (conv_id 유무와 관계없이)
+        try:
+            await save_log_message(session, "INFO", "SKILL REQUEST RECEIVED", str(user_id), conv_id, {"source": "skill_endpoint"})
+        except Exception as log_err:
+            logger.warning(f"로그 저장 실패: {log_err}")
         
         # ====== [자살위험도 분석] ==============================================
         logger.info(f"[RISK_DEBUG] 위험도 분석 시작: text='{user_text_stripped}'")
@@ -646,8 +978,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_critical",
                                             f"Check response critical: {check_score}", str(user_id), safe_conv_id,
                                             {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.warning(f"Critical check response log save failed: {log_err}")
                     
                     # 긴급 연락처 안내 후 점수 0점으로 초기화
                     try:
@@ -663,8 +995,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         logger.warning(f"[CHECK] 점수 초기화 실패: {e}")
                     
                     # 체크 질문 응답 완료 후 turn_count 리셋
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
+                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
                     
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
                 
@@ -677,12 +1009,12 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_high_risk",
                                             f"Check response high risk: {check_score}", str(user_id), safe_conv_id,
                                             {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.warning(f"High risk check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
+                    # 체크 질문 응답 완료 후 turn_count 설정
+                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
                     
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
@@ -697,16 +1029,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         await save_log_message(session, "check_response_normal",
                                             f"Check response normal: {check_score}", str(user_id), safe_conv_id,
                                             {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.warning(f"Normal check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0")
+                    # 체크 질문 응답 완료 후 turn_count 설정
+                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
                     
             except Exception as e:
                 logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
-                import traceback
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
         else:
             # 체크 질문 응답이 아니거나 유효하지 않은 경우
@@ -719,8 +1050,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     await save_log_message(session, "check_response_invalid",
                                         f"Invalid check response: '{user_text_stripped}'", str(user_id), safe_conv_id,
                                         {"source": "check_response", "invalid_input": user_text_stripped, "x_request_id": x_request_id})
-                except Exception:
-                    pass
+                except Exception as log_err:
+                    logger.warning(f"Invalid check response log save failed: {log_err}")
                 
                 # 재질문 메시지 반환
                 invalid_message = get_invalid_score_message()
@@ -768,7 +1099,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                     {"source": "risk_analysis", "level": risk_level, "score": risk_score, "evidence": evidence[:3], "x_request_id": x_request_id})
             except Exception as e:
                 logger.warning(f"[RISK] risk_trigger 로그 저장 실패: {e}")
-                pass
             
             # 긴급 연락처 안내 후 점수 0점으로 초기화
             try:
@@ -794,301 +1124,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         # ====== [이름 플로우 끝: 이하 기존 로직 유지] ===========================
 
-        ENABLE_CALLBACK = True   # 기존 설정 사용하던 값에 맞춰주세요
-        BUDGET = 4.5             # 기존 타임아웃에 맞춰 조정
+        ENABLE_CALLBACK = True
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
-            elapsed = time.perf_counter() - t0
-            time_left = max(0.2, 4.5 - elapsed)
-            try:
-                try:
-                    # conv_id가 유효한 경우에만 전달
-                    safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                    await save_log_message(session, "request_received", "Request received from callback", str(user_id), safe_conv_id, {"source": "callback", "callback": True, "x_request_id": x_request_id})
-                except Exception:
-                    pass
-
-                async def _ensure_quick_conv():
-                    await upsert_user(session, user_id)
-                    conv = await get_or_create_conversation(session, user_id)
-                    return conv.conv_id
-
-                try:
-                    quick_conv_id = await asyncio.wait_for(_ensure_quick_conv(), timeout=min(1.0, time_left - 0.1))
-                except Exception:
-                    quick_conv_id = f"temp_{user_id}"
-
-                quick_text, quick_tokens = await asyncio.wait_for(
-                    ai_service.generate_response(
-                        session=session,
-                        conv_id=quick_conv_id,
-                        user_input=user_text,
-                        prompt_name="default",
-                        user_id=user_id
-                    ),
-                    timeout=time_left,
-                )
-
-                async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
-                    async for s in get_session():
-                        try:
-                            await upsert_user(s, user_id)
-                            conv = await get_or_create_conversation(s, user_id)
-                            try:
-                                await save_message(s, conv.conv_id, "user", user_text, trace_id, None, user_id)
-                                await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), trace_id, quick_tokens, user_id)
-                            except Exception:
-                                try:
-                                    await s.rollback()
-                                except Exception:
-                                    pass
-                                raise
-                            try:
-                                await maybe_rollup_user_summary(s, user_id, conv.conv_id)
-                            except Exception:
-                                pass
-                            break
-                        except Exception as persist_err:
-                            try:
-                                await s.rollback()
-                            except Exception:
-                                pass
-                            logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
-                            break
-
-                asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
-
-                try:
-                    update_last_activity(quick_conv_id)
-                except Exception:
-                    pass
-                return JSONResponse(content={
-                    "version": "2.0",
-                    "template": {"outputs":[{"simpleText":{"text": remove_markdown(quick_text)}}]}
-                }, media_type="application/json; charset=utf-8")
-            except Exception:
-                pass
-
-            # 시간 내 미완료시 즉시 콜백 대기 응답 반환
-            immediate = {
-                "version": "2.0",
-                "template": {"outputs":[{"simpleText":{"text":"답변을 생성 중입니다..."}}]},
-                "useCallback": True
-            }
-            try:
-                # conv_id가 유효한 경우에만 전달
-                safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                await save_log_message(session, "callback_waiting_sent", "Callback waiting sent", str(user_id), safe_conv_id, {"source": "callback", "x_request_id": x_request_id})
-            except Exception:
-                pass
-
-            import re
-
-            MAX_SIMPLETEXT = 900   # 카카오 안전 마진
-            MAX_OUTPUTS    = 3     # 한 번에 보낼 simpleText 개수
-
-            _SENT_ENDERS = ("...", "…", ".", "!", "?", "。", "！", "？")
-
-            def _hard_wrap_sentence(s: str, limit: int) -> list[str]:
-                """한 문장이 limit보다 길면 최대한 공백/줄바꿈 기준으로 부드럽게 쪼갠다."""
-                out = []
-                u = s.strip()
-                while len(u) > limit:
-                    # 선호도: 줄바꿈 > 공백 > 하드컷
-                    cut = u.rfind("\n", 0, limit)
-                    if cut < int(limit * 0.6):
-                        cut = u.rfind(" ", 0, limit)
-                    if cut == -1:
-                        cut = limit
-                    out.append(u[:cut].rstrip())
-                    u = u[cut:].lstrip()
-                if u:
-                    out.append(u)
-                return out
-
-            def split_for_kakao_sentence_safe(text: str, limit: int = MAX_SIMPLETEXT) -> list[str]:
-                """
-                - 문장 끝(., !, ?, …, 全角句点 등) 또는 빈 줄/줄바꿈 경계를 우선으로 분할
-                - 문장이 limit보다 길면 그 문장만 부드럽게 하드랩
-                """
-                t = remove_markdown(text or "").replace("\r\n", "\n").strip()
-
-                chunks = []
-                i, n = 0, len(t)
-
-                while i < n:
-                    end = min(i + limit, n)
-                    window = t[i:end]
-
-                    if end < n:
-                        # 1) 문장부호 경계 찾기
-                        cand = -1
-                        for p in _SENT_ENDERS:
-                            pos = window.rfind(p)
-                            cand = max(cand, pos)
-
-                        # 2) 문장부호가 너무 앞이면(=너무 작게 잘릴 위험) 줄바꿈/공백 경계도 고려
-                        nl_pos    = window.rfind("\n")
-                        space_pos = window.rfind(" ")
-
-                        boundary = cand
-                        if boundary < int(limit * 0.4):
-                            boundary = max(boundary, nl_pos, space_pos)
-
-                        # 3) 경계가 없으면 하드컷
-                        if boundary == -1:
-                            boundary = len(window)
-                        else:
-                            boundary += 1  # 경계 문자 포함
-
-                    else:
-                        boundary = len(window)
-
-                    piece = window[:boundary].rstrip()
-
-                    # 만약 "한 문장" 자체가 limit보다 긴 경우엔 부드럽게 랩
-                    if len(piece) == boundary and (end < n) and boundary == len(window):
-                        # window 안에 경계가 전혀 없어서 통째로 잘린 케이스
-                        chunks.extend(_hard_wrap_sentence(piece, limit))
-                    else:
-                        if not piece:  # 빈 조각 방지
-                            piece = t[i:end].strip()
-                        if piece:
-                            chunks.append(piece)
-
-                    i += len(piece)
-                    # 경계 이후의 공백/개행 정리
-                    while i < n and t[i] in (" ", "\n"):
-                        i += 1
-
-                return [c for c in chunks if c]
-
-            def pack_into_max_outputs(parts: list[str], limit: int, max_outputs: int) -> list[str]:
-                """
-                이미 limit 이하로 분할된 parts를, 개수를 줄이기 위해 앞에서부터
-                가능한 만큼 합치되 각 조각이 limit를 넘지 않게 그리디로 포장.
-                """
-                if len(parts) <= max_outputs:
-                    return parts
-
-                packed = []
-                cur = ""
-                for p in parts:
-                    if not cur:
-                        cur = p
-                        continue
-                    if len(cur) + 1 + len(p) <= limit:
-                        cur = f"{cur}\n{p}"
-                    else:
-                        packed.append(cur)
-                        cur = p
-                if cur:
-                    packed.append(cur)
-
-                # 그래도 많으면 맨 뒤를 잘라내는 대신, 마지막 아이템에 안내 메시지 추가
-                if len(packed) > max_outputs:
-                    keep = packed[:max_outputs-1]
-                    keep.append("※ 내용이 길어 일부만 보냈어. '자세히'라고 보내면 이어서 보여줄게!")
-                    return keep
-                return packed
-
-            async def _send_callback_response(callback_url: str, text: str, tokens_used: int, request_id: str | None):
-                if not callback_url or not isinstance(callback_url, str) or not callback_url.startswith("http"):
-                    logger.bind(x_request_id=request_id).error(f"Invalid callback_url: {callback_url!r}")
-                    return
-
-                import json, httpx, urllib.request
-
-                parts = split_for_kakao_sentence_safe(text, MAX_SIMPLETEXT)
-                parts = pack_into_max_outputs(parts, MAX_SIMPLETEXT, MAX_OUTPUTS)
-                outputs = [{"simpleText": {"text": p}} for p in parts]
-                
-                payload = {
-                    "version": "2.0",
-                    "template": {"outputs": outputs},
-                    "useCallback": True
-                }
-                headers = {"Content-Type": "application/json; charset=utf-8"}
-
-                # 1) httpx 우선 시도 (에러시 본문도 로깅)
-                try:
-                    async with httpx.AsyncClient(timeout=5.0) as client:
-                        resp = await client.post(callback_url, json=payload, headers=headers)
-                        if resp.status_code >= 400:
-                            logger.error(f"Callback post failed via httpx: {resp.status_code} {resp.reason_phrase} | body={resp.text}")
-                        resp.raise_for_status()
-                        return
-                except Exception as e:
-                    logger.exception(f"Callback post failed via httpx: {e}")
-
-                # 2) urllib 백업 시도 (동일 payload)
-                try:
-                    data = json.dumps(payload).encode("utf-8")
-                    req = urllib.request.Request(callback_url, data=data, headers=headers, method="POST")
-                    # 블로킹이라 스레드로
-                    def _post_blocking():
-                        with urllib.request.urlopen(req, timeout=3) as r:
-                            status = r.status
-                            if status >= 400:
-                                raise RuntimeError(f"urllib callback HTTP {status}")
-                            return status
-                    status = await asyncio.to_thread(_post_blocking)
-                    logger.info(f"Callback posted via urllib, status={status}")
-                except Exception as e:
-                    logger.exception(f"Callback post failed via urllib: {e}")
-
-            async def _handle_callback_full(callback_url: str, user_id: str, user_text: str, request_id: str | None):
-                final_text: str = "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요."
-                tokens_used: int = 0
-                try:
-                    async for s in get_session():
-                        try:
-                            async def _ensure_conv():
-                                await upsert_user(s, user_id)
-                                return await get_or_create_conversation(s, user_id)
-                            conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
-                            conv_id_value = str(conv.conv_id)
-                            try:
-                                if user_text:
-                                    await save_message(s, conv_id_value, "user", user_text, trace_id, None, user_id)
-                            except Exception as save_user_err:
-                                logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
-
-                            final_text, tokens_used = await ai_service.generate_response(
-                                session=s,
-                                conv_id=conv_id_value,
-                                user_input=user_text,
-                                prompt_name="default",
-                                user_id=user_id
-                            )
-                            await save_message(s, conv_id_value, "assistant", final_text, trace_id, tokens_used, user_id)
-                            try:
-                                await save_log_message(s, "callback_final_sent", f"Callback final sent: {len(final_text)} chars", str(user_id), conv_id_value, {"tokens": tokens_used, "request_id": request_id})
-                            except Exception:
-                                pass
-                            try:
-                                await maybe_rollup_user_summary(s, user_id, conv_id_value)
-                            except Exception:
-                                pass
-                            break
-                        except Exception as inner_e:
-                            logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
-                            break
-
-                    try:
-                        await _send_callback_response(callback_url, final_text, tokens_used, request_id)
-                    except Exception as post_err:
-                        logger.bind(x_request_id=request_id).exception(f"Callback post failed: {post_err}")
-                except Exception as e:
-                    logger.bind(x_request_id=request_id).exception(f"Callback flow failed: {e}")
-
-            asyncio.create_task(_handle_callback_full(callback_url, user_id, user_text, x_request_id))
-
-            try:
-                update_last_activity(f"temp_{user_id}")
-            except Exception:
-                pass
-            return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
+            return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)
 
         # 4) 콜백이 아닌 경우: 기존 즉시 응답 흐름
         try:
@@ -1131,7 +1170,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         prompt_name="default",
                         user_id=user_id
                     ),
-                    timeout=BUDGET,
+                    timeout=AI_GENERATION_TIMEOUT,
                 )
             except asyncio.TimeoutError:
                 logger.warning("AI generation timeout. Falling back to canned message.")
@@ -1143,8 +1182,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 # conv_id가 유효한 경우에만 전달
                 safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
                 await save_log_message(session, "message_generated", f"AI message generated: {len(final_text)} chars", str(user_id), conv_id, {"source": "ai_generation", "tokens": tokens_used, "x_request_id": x_request_id})
-            except Exception:
-                pass
+            except Exception as log_err:
+                logger.warning(f"AI message log save failed: {log_err}")
             
             try:
                 if not str(conv_id).startswith("temp_") and conv_id:
@@ -1210,8 +1249,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # LogMessage에도 저장
         try:
             await save_log_message(session, "ERROR", f"Error in skill endpoint: {e}", None, None, {"source": "error"})
-        except Exception:
-            pass
+        except Exception as log_err:
+            logger.warning(f"Error log save failed: {log_err}")
         safe_text = "일시적인 오류가 발생했어요. 다시 한 번 시도해 주세요"
         return JSONResponse(content={
             "version": "2.0",
@@ -1253,51 +1292,16 @@ async def welcome_skill(request: Request, session: AsyncSession = Depends(get_se
         
     except Exception as e:
         logger.exception(f"Error in welcome skill: {e}")
+        # 에러 발생 시에도 기본 웰컴 메시지 반환
+        try:
+            response_text = random.choice(_WELCOME_MESSAGES)
+        except Exception:
+            response_text = "안녕하세요! 무엇을 도와드릴까요?"
+            
         return JSONResponse(content={
             "version": "2.0",
-            "template": {"outputs": [{"simpleText": {"text": random.choice(_WELCOME_MESSAGES)}}]}
+            "template": {"outputs": [{"simpleText": {"text": response_text}}]}
         }, media_type="application/json; charset=utf-8")
 
 
-@router.post("/test-skill")
-async def test_skill_endpoint(request: Request):
-    """디버깅용 테스트 엔드포인트 - 받은 데이터를 그대로 반환"""
-    try:
-        body = await request.json()
-        logger.info("TEST SKILL - Request received")
-        
-        return {"status": "test_success", "received_data": body}
-    except Exception as e:
-        logger.error(f"TEST SKILL - Error: {e}")
-        return {"error": str(e)}
 
-
-@router.post("/test-callback")
-async def test_callback_endpoint(request: Request):
-    """콜백 테스트용 엔드포인트 - 받은 콜백 데이터를 로깅"""
-    try:
-        body = await request.json()
-        logger.info("CALLBACK TEST - Request received")
-        
-        return {"status": "callback_received", "data": body}
-    except Exception as e:
-        logger.error(f"CALLBACK TEST - Error: {e}")
-        return {"error": str(e)}
-
-
-@router.post("/test-name-extraction")
-async def test_name_extraction_endpoint(request: Request):
-    """이름 추출 테스트용 엔드포인트"""
-    try:
-        body = await request.json()
-        text = body.get("text", "")
-        
-        if not text:
-            return {"error": "text field is required"}
-        
-        result = test_name_extraction(text)
-        return {"status": "success", "result": result}
-        
-    except Exception as e:
-        logger.exception(f"Name extraction test failed: {e}")
-        return {"error": str(e)}
