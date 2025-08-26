@@ -969,9 +969,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         risk_trend = user_risk_history.get_risk_trend()
         logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
         
-        # 체크 질문 응답인지 확인
-        check_score = parse_check_response(user_text_stripped)
-        logger.info(f"[CHECK_DEBUG] 체크 응답 파싱 결과: text='{user_text_stripped}', score={check_score}")
+        # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 경우에만 처리)
+        check_score = None
+        if user_risk_history.check_question_turn_count > 0:
+            # 체크 질문이 발송된 상태에서만 응답 파싱 시도
+            check_score = parse_check_response(user_text_stripped)
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 상태에서 응답 파싱: text='{user_text_stripped}', score={check_score}")
+        else:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 미발송 상태: 응답 파싱 건너뜀")
         
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
@@ -1149,9 +1154,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         ENABLE_CALLBACK = True
 
-        # 위험도 기반 프롬프트 선택
-        risk_based_prompt = get_risk_based_prompt(risk_level)
-        logger.info(f"[PROMPT] 위험도 기반 프롬프트 선택: {risk_level} -> {risk_based_prompt}")
+        # 위험도 기반 프롬프트 선택 (체크 질문 응답 완료 후에는 일반 대화용 프롬프트 사용)
+        if check_score is not None:
+            # 체크 질문 응답이 완료된 경우 일반 대화용 프롬프트 사용
+            prompt_name = "default"
+            logger.info(f"[PROMPT] 체크 질문 응답 완료 후 일반 대화용 프롬프트 사용: {prompt_name}")
+        else:
+            # 일반적인 경우 위험도 기반 프롬프트 사용
+            prompt_name = get_risk_based_prompt(risk_level)
+            logger.info(f"[PROMPT] 위험도 기반 프롬프트 선택: {risk_level} -> {prompt_name}")
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)
@@ -1194,7 +1205,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         session=session,
                         conv_id=conv_id,
                         user_input=user_text,
-                        prompt_name=risk_based_prompt,
+                        prompt_name=prompt_name,
                         user_id=user_id,
                         request_id=x_request_id
                     ),
