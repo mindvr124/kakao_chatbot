@@ -8,7 +8,7 @@ from loguru import logger
 # 점수별 정규식 패턴 정의
 RISK_PATTERNS = {
     10: [  # 직접적, 구체적 자살 의도 및 수단 언급
-        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
+        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽을래|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
     ],
     7: [   # 간접적 자살 사고 표현
         re.compile(r"(살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기\s*할래|포기\s*하|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
@@ -17,7 +17,7 @@ RISK_PATTERNS = {
         re.compile(r"(쓸모\s*없|필요\s*없|잘못된\s*사람|아무것도\s*못\s*해|내\s*탓|내가\s*문제|맞았어|괴롭힘|왕따|따돌림|욕설|부모\s*맞았|무서워|때리|때려|몽둥이|폭력)")
     ],
     2: [   # 일반적 스트레스·우울 신호
-        re.compile(r"(힘들|지쳤|하기\s*싫|의욕\s*없|기운\s*없|혼자\s*있고\s*싶|외롭|숨\s*막힌다|우울|무기력|숨막\s*)"),
+        re.compile(r"(힘들|지쳤|하기\s*싫|의욕\s*없|지친다|지쳐|기운\s*없|혼자\s*있고\s*싶|외롭|숨\s*막힌다|우울|무기력|숨막\s*)"),
     ]
 }
 
@@ -122,6 +122,11 @@ class RiskHistory:
     
     def can_send_check_question(self) -> bool:
         """체크 질문을 발송할 수 있는지 확인합니다."""
+        # 체크 질문 응답이 완료된 경우 발송하지 않음
+        if self.last_check_score is not None:
+            logger.info(f"[RISK_HISTORY] 체크 질문 응답 완료 상태: last_check_score={self.last_check_score}, 체크 질문 발송 불가")
+            return False
+        
         # check_question_turn_count가 0이면 체크 질문 발송 가능
         if self.check_question_turn_count == 0:
             logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (초기 상태)")
@@ -401,9 +406,7 @@ def get_check_questions() -> List[str]:
 
 def get_invalid_score_message() -> str:
     """잘못된 점수 입력에 대한 재질문 메시지를 반환합니다."""
-    return ["0부터 10까지 숫자로 편하게 말해줄래? 예: 0, 1, 2, 1점, 2점",
-    "숫자로 표현해주면 내가 더 잘 이해할 수 있어. 0~10 중에서 말해줘. 예: 0, 1, 2 ...",
-    "다시 한 번 숫자로만 알려줄래? 예: 0, 1, 2 ..."]
+    return "다시 한 번 숫자로만 알려줄래? 예: 0, 1, 2 ..."
 
 def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""

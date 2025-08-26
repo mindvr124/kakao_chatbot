@@ -1032,11 +1032,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 elif check_score >= 7:
                     logger.info(f"[CHECK] 위험도 7-8점: 안전 안내 메시지 발송")
                     try:
-                        # conv_id가 유효한 경우에만 전달
+                        # conv_id가 유효한 경우에만 전달 (None이거나 temp_로 시작하면 None)
                         safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                        await save_log_message(session, "check_response_high_risk",
-                                            f"Check response high risk: {check_score}", str(user_id), safe_conv_id,
-                                            {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
+                        if safe_conv_id:
+                            await save_log_message(session, "check_response_high_risk",
+                                                f"Check response high risk: {check_score}", str(user_id), safe_conv_id,
+                                                {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
+                        else:
+                            logger.info(f"[CHECK] conv_id가 유효하지 않아 로그 저장 건너뜀: conv_id={conv_id}")
                     except Exception as log_err:
                         logger.warning(f"High risk check response log save failed: {log_err}")
                     
@@ -1048,11 +1051,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 else:
                     logger.info(f"[CHECK] 위험도 0-6점: 일반 대응 메시지 발송")
                     try:
-                        # conv_id가 유효한 경우에만 전달
+                        # conv_id가 유효한 경우에만 전달 (None이거나 temp_로 시작하면 None)
                         safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                        await save_log_message(session, "check_response_normal",
-                                            f"Check response normal: {check_score}", str(user_id), safe_conv_id,
-                                            {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
+                        if safe_conv_id:
+                            await save_log_message(session, "check_response_normal",
+                                                f"Check response normal: {check_score}", str(user_id), safe_conv_id,
+                                                {"source": "check_response", "check_score": check_score, "guidance": guidance, "x_request_id": x_request_id})
+                        else:
+                            logger.info(f"[CHECK] conv_id가 유효하지 않아 로그 저장 건너뜀: conv_id={conv_id}")
                     except Exception as log_err:
                         logger.warning(f"Normal check response log save failed: {log_err}")
                     
