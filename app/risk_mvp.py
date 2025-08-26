@@ -40,6 +40,7 @@ class RiskHistory:
         self.turns: deque = deque(maxlen=max_turns)
         self.last_updated = datetime.now()
         self.check_question_turn_count = 0  # 체크 질문 발동 후 턴 카운트
+        self.last_check_score = None  # 최근 체크 질문 응답 점수
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""

@@ -166,6 +166,43 @@ class AIService:
             "role": "system",
             "content": "아래는 이전 요약(지난번 대화 기록)을 참고하여, 맥락에 맞는 답변을 제공하세요"
         })
+        
+        # 체크 질문 완료 후 사용자 상태 정보 추가
+        if target_user_id:
+            try:
+                from app.risk_mvp import RiskHistory
+                # 전역 변수에서 RiskHistory 가져오기
+                import app.api.kakao_routes as kakao_routes
+                risk_history = kakao_routes._RISK_HISTORIES.get(target_user_id)
+                
+                if risk_history and hasattr(risk_history, 'last_check_score') and risk_history.last_check_score is not None:
+                    check_score = risk_history.last_check_score
+                    from app.risk_mvp import get_risk_level, get_check_response_guidance
+                    
+                    # 위험도 레벨 계산
+                    cumulative_score = risk_history.get_cumulative_score()
+                    risk_level = get_risk_level(cumulative_score)
+                    guidance = get_check_response_guidance(check_score)
+                    
+                    # 사용자 상태 정보를 프롬프트에 추가
+                    status_context = f"""
+                    사용자 상태 정보:
+                    - 최근 체크 질문 응답: {check_score}점
+                    - 누적 위험도 점수: {cumulative_score}점
+                    - 위험도 레벨: {risk_level}
+                    - 대응 가이드: {guidance}
+
+                    이 정보를 바탕으로 사용자와 자연스럽게 대화를 이어가세요.
+                    체크 질문에 대해서는 언급하지 마세요.
+                    """
+                    messages.append({
+                        "role": "system",
+                        "content": status_context
+                    })
+                    logger.info(f"Added user status context to prompt: check_score={check_score}, risk_level={risk_level}")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to add user status context: {e}")
 
         has_user_summary = False
         user_summary_text: Optional[str] = None

@@ -974,6 +974,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
+            
+            # RiskHistory에 체크 질문 응답 점수 저장
+            user_risk_history.last_check_score = check_score
+            logger.info(f"[CHECK] RiskHistory에 체크 질문 응답 점수 저장: {check_score}점")
+            
             try:
                 await update_check_response(session, user_id, check_score)
                 logger.info(f"[CHECK] 체크 응답 저장 완료: {check_score}점")
@@ -1011,6 +1016,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     user_risk_history.check_question_turn_count = 0
                     logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
                     
+                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
+                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
+                    
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
                 
                 # 7-8점: 안전 안내 메시지
@@ -1028,6 +1036,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
                     user_risk_history.check_question_turn_count = 0
                     logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
+                    
+                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
+                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
                     
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
@@ -1048,6 +1059,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
                     user_risk_history.check_question_turn_count = 0
                     logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
+                    
+                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
+                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
                     
                     # 0-6점 응답 메시지 반환
                     response_message = get_check_response_message(check_score)
@@ -1085,6 +1099,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 # RiskHistory에 체크 질문 발송 기록
                 user_risk_history.mark_check_question_sent()
                 logger.info(f"[CHECK] RiskHistory에 체크 질문 발송 기록 완료")
+                
+                # 새로운 체크 질문 발송 시 이전 응답 점수 리셋
+                user_risk_history.last_check_score = None
+                logger.info(f"[CHECK] 새로운 체크 질문 발송으로 이전 응답 점수 리셋")
                 
                 # 데이터베이스에도 기록 (user_id를 문자열로 변환)
                 user_id_str = str(user_id) if user_id else "unknown"
