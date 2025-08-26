@@ -1087,7 +1087,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         else:
             # 체크 질문 응답이 아니거나 유효하지 않은 경우
             # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우
-            if user_risk_history.check_question_turn_count > 0:
+            if user_risk_history.check_question_turn_count > 0 and user_risk_history.last_check_score is None:
                 # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 숫자만 재요청
                 logger.info(f"[CHECK] 무효 응답 -> 숫자 0~10만 다시 요청(상태 유지)")
                 # 재요청 상태 유지 (check_question_turn_count는 그대로 유지)
