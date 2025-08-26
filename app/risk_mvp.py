@@ -44,10 +44,12 @@ class RiskHistory:
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
-        # 체크 질문 발송 후 턴 카운트 증가
+        # 체크 질문 발송 후 턴 카운트 감소 (20턴 카운트다운)
         if self.check_question_turn_count > 0:
-            self.check_question_turn_count += 1
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 증가: {self.check_question_turn_count}")
+            self.check_question_turn_count -= 1
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 감소: {self.check_question_turn_count + 1} -> {self.check_question_turn_count}")
+        elif self.check_question_turn_count == 0:
+            logger.info(f"[RISK_HISTORY] 체크 질문 20턴 제한 완료: 체크 질문 발송 가능")
         
         turn_analysis = self._analyze_single_turn(text)
         
@@ -127,15 +129,15 @@ class RiskHistory:
             logger.info(f"[RISK_HISTORY] 체크 질문 응답 완료 상태: last_check_score={self.last_check_score}, 체크 질문 발송 불가")
             return False
         
-        # check_question_turn_count가 0이면 체크 질문 발송 가능
+        # check_question_turn_count가 0이면 체크 질문 발송 가능 (20턴 카운트다운 완료)
         if self.check_question_turn_count == 0:
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (초기 상태)")
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 카운트다운 완료)")
             return True
         
-        # 체크 질문 발동 후 20턴이 지나지 않았으면 발송 불가
+        # 체크 질문 발송 후 20턴이 지나지 않았으면 발송 불가
         if self.check_question_turn_count > 0 and self.check_question_turn_count <= 20:
             # 예외: 5턴 이내 자살 플래그 10점이 넘어가면 발송 가능
-            if self.check_question_turn_count <= 5:
+            if self.check_question_turn_count >= 15:  # 20-5=15턴 이내 (카운트다운 기준)
                 # 최근 5턴에서 10점 이상인 턴이 있는지 확인
                 recent_turns = list(self.turns)[-5:]
                 high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
@@ -145,10 +147,10 @@ class RiskHistory:
                 else:
                     logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 없음, 체크 질문 발송 불가")
             
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 제한)")
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 카운트다운 진행 중)")
             return False
         
-        # 20턴이 지났으면 발송 가능
+        # 20턴이 지났으면 발송 가능 (이 부분은 실제로는 도달할 수 없음)
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 경과)")
         return True
     

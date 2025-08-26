@@ -480,7 +480,7 @@ NAME_ALLOWED = re.compile(r"^[가-힣a-zA-Z0-9·\-\_]{1,20}$")
 def clean_name(s: str) -> str:
     s = s.strip()
     # 양쪽 따옴표/괄호/장식 제거
-    s = re.sub(r'[\"\'“”‘’()\[\]{}<>…~]+', "", s)
+    s = re.sub(r'[\"\'"()\[\]{}<>~]+', "", s)
     return s.strip()
 
 def is_valid_name(s: str) -> bool:
@@ -993,9 +993,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 guidance = get_check_response_guidance(check_score)
                 logger.info(f"[CHECK] 대응 가이드: {guidance}")
 
-                # 체크 응답을 받았으므로, 반드시 turn_count를 0으로 리셋하여 재질문이 반복되지 않도록 한다
-                user_risk_history.check_question_turn_count = 20  # 20턴 이내 재질문 금지
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 20 (20턴 이내 재질문 금지)")
+                # 체크 응답을 받았으므로, 반드시 turn_count를 20으로 설정하여 20턴 동안 재질문을 방지한다
+                user_risk_history.check_question_turn_count = 20  # 20턴 카운트다운 시작
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 20 (20턴 카운트다운 시작)")
                 
                 # 체크 질문 응답 후 모든 위험도 점수 초기화
                 try:
