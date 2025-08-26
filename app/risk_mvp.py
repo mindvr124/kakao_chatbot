@@ -256,6 +256,8 @@ class RiskHistory:
         logger.info(f"[RISK_ANALYSIS] 패턴 매칭 완료: 총 {total_score}점")
         
         # 긍정 발화 감점 적용 (-2점, 최저 0점)
+        logger.info(f"[RISK_ANALYSIS] 긍정 발화 패턴 검사: text='{text_lower}', P_POSITIVE.search 결과: {P_POSITIVE.search(text_lower)}")
+        
         if P_POSITIVE.search(text_lower):
             before_deduction = total_score
             total_score = max(0, total_score - 2)
@@ -269,6 +271,8 @@ class RiskHistory:
             })
             
             logger.info(f"[RISK_ANALYSIS] 긍정 발화 감점 적용: before={before_deduction}, deduction={deduction_applied}, after={total_score}")
+        else:
+            logger.info(f"[RISK_ANALYSIS] 긍정 발화 패턴 미매칭: text='{text_lower}'")
         
         logger.info(f"[RISK_ANALYSIS] 최종 분석 결과: score={total_score}, evidence_count={len(evidence)}")
         
@@ -358,6 +362,8 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                         })
         
         # 긍정 발화 감점 적용 (-2점, 최저 0점)
+        logger.info(f"[RISK_HISTORY] 긍정 발화 패턴 검사: text='{text_lower}', P_POSITIVE.search 결과: {P_POSITIVE.search(text_lower)}")
+        
         if P_POSITIVE.search(text_lower):
             total_score = max(0, total_score - 2)
             evidence.append({
@@ -367,6 +373,8 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                 "excerpt": "긍정적인 발화로 인한 감점"
             })
             logger.info(f"[RISK_HISTORY] 긍정 발화 감점 적용: -2점, 최종 점수={total_score}")
+        else:
+            logger.info(f"[RISK_HISTORY] 긍정 발화 패턴 미매칭: text='{text_lower}'")
         
         return total_score, flags, evidence
 
