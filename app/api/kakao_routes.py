@@ -383,6 +383,12 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
         pass
         
     return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
+    
+def decrement_check_question_turn_if_needed(user_risk_history):
+    """체크 질문 턴 카운트를 감소시킵니다."""
+    if user_risk_history.check_question_turn_count > 0:
+        user_risk_history.check_question_turn_count = max(0, user_risk_history.check_question_turn_count - 1)
+        logger.info(f"check_question_turn: {user_risk_history.check_question_turn_count}")
 
 """카카오 스킬 관련 라우터"""
 import asyncio
@@ -943,6 +949,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if getattr(user_risk_history, 'db_session', None) is None:
             user_risk_history.db_session = session
         
+        # 매 턴마다 턴 카운트 감소 (체크질문 발송 후 20턴 카운트다운)
+        decrement_check_question_turn_if_needed(user_risk_history)
+        
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
         
@@ -1064,6 +1073,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
                     logger.info(f"[CHECK] 7-8점 응답 처리 완료, 메시지 반환")
+                    
                     return kakao_text(response_message)
                 
                 # 0-6점: 일반 대응 메시지 후 정상 대화 진행
@@ -1084,6 +1094,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 0-6점 응답 메시지: {response_message}")
                     logger.info(f"[CHECK] 0-6점 응답 처리 완료, 메시지 반환")
+                    
                     return kakao_text(response_message)
                     
             except Exception as e:
@@ -1097,6 +1108,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.info(f"[CHECK] 무효 응답 -> 숫자 0~10만 다시 요청(상태 유지)")
                 # 재요청 상태 유지 (check_question_turn_count는 그대로 유지)
                 # 다음 입력에서 다시 체크 질문 응답 파싱 시도
+            
                 return kakao_text("0~10 중 숫자 하나로만 답해줘!")
             else:
                 logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")

@@ -46,28 +46,7 @@ class RiskHistory:
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
-        # 체크 질문 발송 후 턴 카운트 감소 (20턴 카운트다운)
-        if self.check_question_turn_count > 0:
-            old_count = self.check_question_turn_count
-            self.check_question_turn_count = max(0, self.check_question_turn_count - 1)
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 감소: {old_count} -> {self.check_question_turn_count}")
-            
-            # 데이터베이스에도 동기화
-            if self.user_id and self.db_session:
-                try:
-                    import asyncio
-                    from app.database.service import decrement_check_question_turn
-                    # 비동기 함수를 동기적으로 실행
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # 이미 실행 중인 루프가 있으면 새로 생성
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                    loop.run_until_complete(decrement_check_question_turn(self.db_session, self.user_id))
-                except Exception as e:
-                    logger.error(f"[RISK_HISTORY] DB 턴 카운트 감소 실패: {e}")
-        elif self.check_question_turn_count == 0:
-            logger.info(f"[RISK_HISTORY] 체크 질문 20턴 제한 완료: 체크 질문 발송 가능")
+        logger.info(f"[RISK_HISTORY] add_turn 시작: check_question_turn_count={self.check_question_turn_count}")
         
         turn_analysis = self._analyze_single_turn(text)
         
