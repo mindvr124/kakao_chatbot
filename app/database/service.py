@@ -488,12 +488,67 @@ async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> 
         raise
 
 async def mark_check_question_sent(session: AsyncSession, user_id: str) -> None:
-    """체크 질문이 발송되었음을 표시합니다."""
+    """체크 질문이 발송되었음을 표시하고 턴 카운트를 20으로 설정합니다."""
     try:
         risk_state = await get_or_create_risk_state(session, user_id)
         risk_state.check_question_sent = True
+        risk_state.check_question_turn = 20  # 20턴 카운트다운 시작
         try:
             await session.commit()
+            logger.info(f"[RISK_DB] 체크 질문 발송 기록 완료: user_id={user_id}, check_question_turn={risk_state.check_question_turn}")
+        except Exception:
+            await session.rollback()
+            raise
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
+
+async def decrement_check_question_turn(session: AsyncSession, user_id: str) -> None:
+    """체크 질문 턴 카운트를 1 감소시킵니다 (0 밑으로 내려가지 않음)."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        old_turn = risk_state.check_question_turn
+        risk_state.check_question_turn = max(0, risk_state.check_question_turn - 1)
+        
+        if old_turn != risk_state.check_question_turn:
+            try:
+                await session.commit()
+                logger.info(f"[RISK_DB] 체크 질문 턴 카운트 감소: user_id={user_id}, {old_turn} -> {risk_state.check_question_turn}")
+            except Exception:
+                await session.rollback()
+                raise
+    except Exception:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        raise
+
+async def get_check_question_turn(session: AsyncSession, user_id: str) -> int:
+    """사용자의 체크 질문 턴 카운트를 조회합니다."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        return risk_state.check_question_turn
+    except Exception:
+        return 0
+
+async def reset_check_question_state(session: AsyncSession, user_id: str) -> None:
+    """체크 질문 관련 상태를 초기화합니다."""
+    try:
+        risk_state = await get_or_create_risk_state(session, user_id)
+        old_score = risk_state.last_check_score
+        old_turn = risk_state.check_question_turn
+        
+        risk_state.last_check_score = None
+        risk_state.check_question_turn = 0
+        risk_state.check_question_sent = False
+        
+        try:
+            await session.commit()
+            logger.info(f"[RISK_DB] 체크 질문 상태 초기화 완료: user_id={user_id}, last_check_score={old_score}->None, check_question_turn={old_turn}->0")
         except Exception:
             await session.rollback()
             raise

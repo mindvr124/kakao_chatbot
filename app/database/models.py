@@ -113,4 +113,5 @@ class RiskState(SQLModel, table=True, table_name="riskstate"):
     last_updated: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))
     check_question_sent: bool = Field(default=False)  # 체크 질문 발송 여부
     last_check_score: int = Field(default=None)  # 마지막 체크 질문 응답 점수
+    check_question_turn: int = Field(default=0)  # 체크 질문 턴 카운트 (20부터 0까지)
     created_at: datetime = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None))

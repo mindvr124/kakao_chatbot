@@ -8,7 +8,7 @@ from loguru import logger
 # 점수별 정규식 패턴 정의
 RISK_PATTERNS = {
     10: [  # 직접적, 구체적 자살 의도 및 수단 언급
-        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽을래|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
+        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽을래|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶|죽자|죽어|죽\s*어)"),
     ],
     7: [   # 간접적 자살 사고 표현
         re.compile(r"(살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기\s*할래|포기\s*하|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
@@ -23,7 +23,7 @@ RISK_PATTERNS = {
 
 # 부정어, 메타언어, 3인칭, 관용어, 과거시제 패턴
 # 부정어: 일반적인 부정 표현 (하지만 "살고싶지않아" 같은 위험 표현은 제외)
-P_NEG = re.compile(r"(죽고\s*싶지\s*않|죽고\s*싶진\s*않)")
+P_NEG = re.compile(r"(죽고\s*싶지\s*않|죽고\s*싶진\s*않|싶냐)")
 P_META = re.compile(r"(뉴스|기사|드라마|가사|영화|예시|논문|수업|연구|애니|소설설)")
 P_THIRD = re.compile(r"(친구|사람들|누가|그[가녀])")
 P_IDIOM = re.compile(r"(죽을맛|웃겨\s*죽|맛\s*죽이)")
@@ -35,19 +35,37 @@ P_POSITIVE = re.compile(r"(괜찮아|괜찮|나아졌어|덜\s*힘들|고마워|
 class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
     
-    def __init__(self, max_turns: int = 20):
+    def __init__(self, max_turns: int = 20, user_id: str = None, db_session = None):
         self.turns = deque(maxlen=max_turns)
         self.max_turns = max_turns
         self.last_updated = datetime.now()
         self.check_question_turn_count = 0
         self.last_check_score = None
+        self.user_id = user_id
+        self.db_session = db_session
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
         # 체크 질문 발송 후 턴 카운트 감소 (20턴 카운트다운)
         if self.check_question_turn_count > 0:
-            self.check_question_turn_count -= 1
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 감소: {self.check_question_turn_count + 1} -> {self.check_question_turn_count}")
+            old_count = self.check_question_turn_count
+            self.check_question_turn_count = max(0, self.check_question_turn_count - 1)
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 후 턴 카운트 감소: {old_count} -> {self.check_question_turn_count}")
+            
+            # 데이터베이스에도 동기화
+            if self.user_id and self.db_session:
+                try:
+                    import asyncio
+                    from app.database.service import decrement_check_question_turn
+                    # 비동기 함수를 동기적으로 실행
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 이미 실행 중인 루프가 있으면 새로 생성
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    loop.run_until_complete(decrement_check_question_turn(self.db_session, self.user_id))
+                except Exception as e:
+                    logger.error(f"[RISK_HISTORY] DB 턴 카운트 감소 실패: {e}")
         elif self.check_question_turn_count == 0:
             logger.info(f"[RISK_HISTORY] 체크 질문 20턴 제한 완료: 체크 질문 발송 가능")
         
@@ -68,7 +86,7 @@ class RiskHistory:
         current_turn_score = turn_analysis['score']
         cumulative_score = self.get_cumulative_score()
         
-        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, current_turn_score={current_turn_score}, cumulative_score={cumulative_score}")
+        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, current_turn_score={current_turn_score}, cumulative_score={cumulative_score}, check_question_turn_count={self.check_question_turn_count}")
         
         return turn_analysis
     
@@ -119,40 +137,74 @@ class RiskHistory:
     def mark_check_question_sent(self):
         """체크 질문이 발송되었음을 기록합니다."""
         old_count = self.check_question_turn_count
-        self.check_question_turn_count = 1  # 1부터 시작 (다음 턴부터 카운트)
+        self.check_question_turn_count = 20  # 20턴 카운트다운 시작
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 기록: {old_count} -> {self.check_question_turn_count}")
+        
+        # 데이터베이스에도 동기화
+        if self.user_id and self.db_session:
+            try:
+                import asyncio
+                from app.database.service import mark_check_question_sent
+                # 비동기 함수를 동기적으로 실행
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새로 생성
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                loop.run_until_complete(mark_check_question_sent(self.db_session, self.user_id))
+            except Exception as e:
+                logger.error(f"[RISK_HISTORY] DB 체크 질문 발송 기록 실패: {e}")
+    
+    def sync_with_database(self):
+        """데이터베이스와 메모리 상태를 동기화합니다."""
+        if self.user_id and self.db_session:
+            try:
+                import asyncio
+                from app.database.service import get_check_question_turn
+                # 비동기 함수를 동기적으로 실행
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새로 생성
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                db_turn = loop.run_until_complete(get_check_question_turn(self.db_session, self.user_id))
+                if db_turn != self.check_question_turn_count:
+                    self.check_question_turn_count = db_turn
+                    logger.info(f"[RISK_HISTORY] DB 동기화: check_question_turn_count={self.check_question_turn_count}")
+            except Exception as e:
+                logger.error(f"[RISK_HISTORY] DB 동기화 실패: {e}")
     
     def can_send_check_question(self) -> bool:
         """체크 질문을 발송할 수 있는지 확인합니다."""
-        # 체크 질문 응답이 완료된 경우 발송하지 않음
-        if self.last_check_score is not None:
-            logger.info(f"[RISK_HISTORY] 체크 질문 응답 완료 상태: last_check_score={self.last_check_score}, 체크 질문 발송 불가")
-            return False
+        # check_question_turn_count가 0이면 체크 질문 발송 가능
+        can_send = self.check_question_turn_count == 0
+        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능 여부: check_question_turn_count={self.check_question_turn_count}, can_send={can_send}")
+        return can_send
+    
+    def process_check_question_response(self, response_text: str) -> Optional[int]:
+        """체크 질문 응답을 처리하고 점수를 저장합니다."""
+        logger.info(f"[RISK_HISTORY] 체크 질문 응답 처리 시작: '{response_text}'")
         
-        # check_question_turn_count가 0이면 체크 질문 발송 가능 (20턴 카운트다운 완료)
-        if self.check_question_turn_count == 0:
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 카운트다운 완료)")
-            return True
+        # 점수 파싱
+        parsed_score = parse_check_response(response_text)
         
-        # 체크 질문 발송 후 20턴이 지나지 않았으면 발송 불가
-        if self.check_question_turn_count > 0 and self.check_question_turn_count <= 20:
-            # 예외: 5턴 이내 자살 플래그 10점이 넘어가면 발송 가능
-            if self.check_question_turn_count >= 15:  # 20-5=15턴 이내 (카운트다운 기준)
-                # 최근 5턴에서 10점 이상인 턴이 있는지 확인
-                recent_turns = list(self.turns)[-5:]
-                high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
-                if high_risk_turns:
-                    logger.info(f"[RISK_HISTORY] 예외 조건 충족: 5턴 이내 고위험 점수 {len(high_risk_turns)}개 발견, 체크 질문 발송 가능")
-                    return True
-                else:
-                    logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 없음, 체크 질문 발송 불가")
-            
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 카운트다운 진행 중)")
-            return False
+        if parsed_score is not None:
+            self.last_check_score = parsed_score
+            logger.info(f"[RISK_HISTORY] 체크 질문 응답 점수 저장: {parsed_score}")
+        else:
+            logger.info(f"[RISK_HISTORY] 체크 질문 응답 파싱 실패")
         
-        # 20턴이 지났으면 발송 가능 (이 부분은 실제로는 도달할 수 없음)
-        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 경과)")
-        return True
+        return parsed_score
+    
+    def reset_check_question_state(self):
+        """체크 질문 관련 상태를 초기화합니다."""
+        old_score = self.last_check_score
+        old_count = self.check_question_turn_count
+        
+        self.last_check_score = None
+        self.check_question_turn_count = 0
+        
+        logger.info(f"[RISK_HISTORY] 체크 질문 상태 초기화: last_check_score={old_score}->None, check_question_turn_count={old_count}->0")
     
     def _analyze_single_turn(self, text: str) -> Dict:
         """단일 텍스트의 위험도를 분석합니다."""
@@ -379,19 +431,7 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
             logger.info(f"[CHECK_CONDITION] can_send가 True이므로 체크 질문 발송 가능")
             return True
         
-        # can_send가 False이고 check_question_turn_count <= 5일 때 예외 조건 확인
-        if risk_history.check_question_turn_count <= 5:
-            recent_turns = list(risk_history.turns)[-5:]  # 최근 5턴 확인
-            high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
-            
-            if high_risk_turns:
-                high_risk_details = [f"턴{turn['score']}점('{turn['text'][:20]}...')" for turn in high_risk_turns]
-                logger.info(f"[CHECK_CONDITION] 예외 조건 충족: 5턴 이내 자살 플래그 10점 이상 {len(high_risk_turns)}턴, 상세: {' | '.join(high_risk_details)}, 체크 질문 강제 발송")
-                return True
-            else:
-                logger.info(f"[CHECK_CONDITION] 예외 조건 미충족: 5턴 이내 자살 플래그 10점 이상 없음")
-        
-        logger.info(f"[CHECK_CONDITION] can_send가 False이고 예외 조건도 미충족하므로 체크 질문 발송 불가")
+        logger.info(f"[CHECK_CONDITION] can_send가 False이므로 체크 질문 발송 불가")
         return False
     
     # RiskHistory가 없는 경우 기본 점수 조건만 확인
