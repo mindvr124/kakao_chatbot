@@ -305,6 +305,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
             quick_conv_id = f"temp_{user_id}"
 
         # 빠른 AI 응답 생성
+        # request_id가 정의되어 있지 않으므로 x_request_id를 대신 사용합니다.
         quick_text, quick_tokens = await asyncio.wait_for(
             ai_service.generate_response(
                 session=session,
@@ -312,7 +313,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                 user_input=user_text,
                 prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
                 user_id=user_id,
-                request_id=request_id
+                request_id=x_request_id
             ),
             timeout=time_left,
         )
@@ -986,7 +987,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 # 체크 응답 점수에 따른 대응
                 guidance = get_check_response_guidance(check_score)
                 logger.info(f"[CHECK] 대응 가이드: {guidance}")
-                
+
+                # 체크 응답을 받았으므로, 반드시 turn_count를 0으로 리셋하여 재질문이 반복되지 않도록 한다
+                user_risk_history.check_question_turn_count = 0
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
+
                 # 9-10점: 즉시 안전 응답
                 if check_score >= 9:
                     logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
@@ -1012,13 +1017,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as e:
                         logger.warning(f"[CHECK] 점수 초기화 실패: {e}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
-                    
-                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
-                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
-                    
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
                 
                 # 7-8점: 안전 안내 메시지
@@ -1033,16 +1031,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as log_err:
                         logger.warning(f"High risk check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
-                    
-                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
-                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
-                    
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
-                    return kakao_text(response_message)
+                    logger.info(f"[CHECK] 7-8점 응답 처리 완료, 일반 AI 응답으로 이어감")
                 
                 # 0-6점: 일반 대응 메시지 후 정상 대화 진행
                 else:
@@ -1056,17 +1047,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as log_err:
                         logger.warning(f"Normal check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
-                    user_risk_history.check_question_turn_count = 0
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
-                    
-                    # 체크 질문 응답 점수는 유지 (AI가 상태를 파악할 수 있도록)
-                    logger.info(f"[CHECK] 체크 질문 응답 점수 유지: {check_score}점 (AI 컨텍스트용)")
-                    
-                    # 0-6점 응답 메시지 반환
+                    # 0-6점 응답 메시지 생성 (반환하지 않음)
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 0-6점 응답 메시지: {response_message}")
-                    return kakao_text(response_message)
+                    logger.info(f"[CHECK] 0-6점 응답 처리 완료, 일반 AI 응답으로 이어감")
                     
             except Exception as e:
                 logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
