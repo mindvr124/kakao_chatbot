@@ -43,6 +43,7 @@ class RiskHistory:
         self.last_check_score = None
         self.user_id = user_id
         self.db_session = db_session
+        logger.info(f"[RISK_HISTORY] RiskHistory 객체 생성: user_id={user_id}, check_question_turn_count={self.check_question_turn_count}")
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
@@ -117,7 +118,7 @@ class RiskHistory:
         """체크 질문이 발송되었음을 기록합니다."""
         old_count = self.check_question_turn_count
         self.check_question_turn_count = 20  # 20턴 카운트다운 시작
-        logger.info(f"[RISK_HISTORY] 체크 질문 발송 기록: {old_count} -> {self.check_question_turn_count}")
+        logger.info(f"[RISK_HISTORY] 체크 질문 발송 기록: {old_count} -> {self.check_question_turn_count} (호출 스택: {self._get_caller_info()})")
         
         # 데이터베이스에도 동기화
         if self.user_id and self.db_session:
@@ -134,6 +135,21 @@ class RiskHistory:
             except Exception as e:
                 logger.error(f"[RISK_HISTORY] DB 체크 질문 발송 기록 실패: {e}")
     
+    def _get_caller_info(self) -> str:
+        """호출자 정보를 반환합니다."""
+        import inspect
+        try:
+            frame = inspect.currentframe()
+            caller_frame = frame.f_back
+            if caller_frame:
+                filename = caller_frame.f_code.co_filename
+                function = caller_frame.f_code.co_name
+                line = caller_frame.f_lineno
+                return f"{filename}:{function}:{line}"
+        except:
+            pass
+        return "unknown"
+    
     def sync_with_database(self):
         """데이터베이스와 메모리 상태를 동기화합니다."""
         if self.user_id and self.db_session:
@@ -147,9 +163,11 @@ class RiskHistory:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 db_turn = loop.run_until_complete(get_check_question_turn(self.db_session, self.user_id))
+                logger.info(f"[RISK_HISTORY] DB 동기화 시도: 현재={self.check_question_turn_count}, DB={db_turn}")
                 if db_turn != self.check_question_turn_count:
+                    old_count = self.check_question_turn_count
                     self.check_question_turn_count = db_turn
-                    logger.info(f"[RISK_HISTORY] DB 동기화: check_question_turn_count={self.check_question_turn_count}")
+                    logger.info(f"[RISK_HISTORY] DB 동기화 완료: {old_count} -> {self.check_question_turn_count}")
             except Exception as e:
                 logger.error(f"[RISK_HISTORY] DB 동기화 실패: {e}")
     
@@ -498,16 +516,7 @@ def parse_check_response(text: str) -> Optional[int]:
     logger.info(f"[PARSE_DEBUG] 파싱 실패: None 반환")
     return None
 
-def get_risk_level(score: int) -> str:
-    """점수에 따른 위험도 레벨을 반환합니다."""
-    if score >= 25:
-        return "critical"
-    elif score >= 15:
-        return "high"
-    elif score >= 8:
-        return "moderate"
-    else:
-        return "low"
+# get_risk_level 제거: 위험도 레벨 문자열 기반 로직 미사용
 
 def get_check_response_guidance(check_score: int) -> str:
     """

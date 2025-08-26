@@ -181,17 +181,15 @@ class AIService:
                     and risk_history.last_check_score is not None
                 ):
                     check_score = risk_history.last_check_score
-                    from app.risk_mvp import get_risk_level, get_check_response_guidance
+                    from app.risk_mvp import get_check_response_guidance
 
                     cumulative_score = risk_history.get_cumulative_score()
-                    risk_level = get_risk_level(cumulative_score)
                     guidance = get_check_response_guidance(check_score)
 
                     status_context = (
                         f"사용자 상태 정보:\n"
                         f"- 최근 체크 질문 응답: {check_score}점\n"
                         f"- 누적 위험도 점수: {cumulative_score}점\n"
-                        f"- 위험도 레벨: {risk_level}\n"
                         f"- 대응 가이드: {guidance}\n\n"
                         f"이 정보를 바탕으로 사용자와 자연스럽게 대화를 이어가세요.\n"
                         f"체크 질문에 대해서는 언급하지 마세요."
@@ -204,8 +202,7 @@ class AIService:
                     })
                     logger.info(
                         f"[PROMPT_DEBUG] status_context 프롬프트에 추가됨: "
-                        f"check_score={check_score}, risk_level={risk_level}, "
-                        f"messages 길이: {len(messages)}"
+                        f"check_score={check_score}, messages 길이: {len(messages)}"
                     )
                     # 실제로 messages에 status_context가 들어갔는지 마지막 메시지 내용도 로그로 남김
                     logger.info(f"[PROMPT_DEBUG] messages[-1]: {messages[-1]}")

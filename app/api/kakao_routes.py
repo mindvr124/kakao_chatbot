@@ -50,7 +50,6 @@ from app.risk_mvp import (
     should_send_check_question,
     get_check_questions,
     parse_check_response,
-    get_risk_level,
     RiskHistory,
     get_check_response_message,
     get_check_response_guidance,
@@ -998,8 +997,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
         
-        risk_level = get_risk_level(cumulative_score)
-        logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
+        # 위험도 레벨 계산 로직 제거 (get_risk_level 삭제)
+        logger.info(f"[RISK_DEBUG] 위험도 레벨 계산 제거: cumulative_score={cumulative_score}")
         
         # 데이터베이스에 누적 위험도 점수 저장
         try:
@@ -1013,7 +1012,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # 위험도 추세 분석
         risk_trend = user_risk_history.get_risk_trend()
-        logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
+        logger.info(f"[RISK] score={risk_score} trend={risk_trend} flags={flags}")
         
         # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 직후에만 처리)
         check_score = None
@@ -1204,25 +1203,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
 
-        # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
-        if check_score is None and risk_level in ("critical", "high"):
-            try:
-                # user_id를 문자열로 확실하게 변환
-                user_id_str = str(user_id) if user_id else "unknown"
-                # conv_id가 유효한 경우에만 전달
-                safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                await save_log_message(session, "risk_trigger",
-                                    f"Risk trigger: {risk_level} level", user_id_str, safe_conv_id,
-                                    {"source": "risk_analysis", "level": risk_level, "score": risk_score, "evidence": evidence[:3], "x_request_id": x_request_id})
-            except Exception as e:
-                logger.warning(f"[RISK] risk_trigger 로그 저장 실패: {e}")
-            
-            # 긴급 연락처 안내 후 점수 유지 (turns 초기화하지 않음)
-            # 위험도가 높은 경우에도 turns를 유지하여 누적 위험도를 추적
-            logger.info(f"[RISK] 긴급 연락처 안내 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
-            
-            # 안전 응답 반환
-            return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
+        # ====== [일반 대화 후 점수 유지] ==============================================
+        # 일반 대화 후에는 turns와 점수를 유지하여 누적 위험도를 추적
+        # check_question_turn_count로 20턴 동안 재질문을 방지
+        logger.info(f"[RISK] 일반 대화 완료 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
 
         # ====== [일반 대화 후 점수 유지] ==============================================
         # 일반 대화 후에는 turns와 점수를 유지하여 누적 위험도를 추적
@@ -1239,15 +1223,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         ENABLE_CALLBACK = True
 
-        # 위험도 기반 프롬프트 선택 (체크 질문 응답 완료 후에는 일반 대화용 프롬프트 사용)
-        if check_score is not None:
-            # 체크 질문 응답이 완료된 경우 일반 대화용 프롬프트 사용
-            prompt_name = "default"
-            logger.info(f"[PROMPT] 체크 질문 응답 완료 후 일반 대화용 프롬프트 사용: {prompt_name}")
-        else:
-            # 일반적인 경우 위험도 기반 프롬프트 사용
-            prompt_name = get_risk_based_prompt(risk_level)
-            logger.info(f"[PROMPT] 위험도 기반 프롬프트 선택: {risk_level} -> {prompt_name}")
+        # 프롬프트 선택: 위험도 레벨 기반 사용 제거, 항상 기본 프롬프트 사용
+        prompt_name = "default"
+        logger.info(f"[PROMPT] 기본 프롬프트 사용: {prompt_name}")
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)
