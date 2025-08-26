@@ -1007,9 +1007,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as e:
                         logger.warning(f"[CHECK] 점수 초기화 실패: {e}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 리셋
-                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
+                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
                     
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
                 
@@ -1025,9 +1025,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as log_err:
                         logger.warning(f"High risk check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 설정
-                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
+                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
                     
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
@@ -1045,9 +1045,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as log_err:
                         logger.warning(f"Normal check response log save failed: {log_err}")
                     
-                    # 체크 질문 응답 완료 후 turn_count 설정
-                    user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
-                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
+                    # 체크 질문 응답 완료 후 turn_count 리셋 (체크 질문 완료)
+                    user_risk_history.check_question_turn_count = 0
+                    logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
                     
                     # 0-6점 응답 메시지 반환
                     response_message = get_check_response_message(check_score)
