@@ -13,27 +13,17 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.schemas.schemas import (
-    ConversationCreate,
-    ConversationResponse,
-    MessageCreate,
-    MessageResponse,
-    UserCreate,
-    UserResponse,
-)
+
 from app.core.ai_service import ai_service
 from app.core.background_tasks import (
-    maybe_rollup_user_summary,
     update_last_activity,
 )
+from app.core.summary import (
+    maybe_rollup_user_summary,
+)
 from app.database.db import get_session
-from app.database.models import Conversation, Message, User
+from app.database.models import AppUser, Conversation, Message
 from app.database.service import (
-    get_conversation,
-    get_conversations,
-    get_messages,
-    get_user,
-    get_users,
     mark_check_question_sent,
     save_log_message,
     update_check_response,
@@ -43,8 +33,15 @@ from app.database.service import (
 from app.utils.utils import (
     extract_callback_url,
     extract_user_id,
-    get_or_create_conversation,
     remove_markdown,
+)
+from app.database.service import (
+    mark_check_question_sent,
+    save_log_message,
+    update_check_response,
+    update_risk_score,
+    upsert_user,
+    get_or_create_conversation,
     save_message,
 )
 from app.risk_mvp import (
