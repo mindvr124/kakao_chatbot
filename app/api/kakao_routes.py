@@ -1005,6 +1005,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
             await update_risk_score(session, user_id, cumulative_score)
             logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
+            
+            # 저장 후 점수 재확인
+            after_save_score = user_risk_history.get_cumulative_score()
+            logger.info(f"[RISK_SAVE] 저장 후 누적 점수 재확인: {after_save_score}")
+            
         except Exception as e:
             logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
             import traceback
