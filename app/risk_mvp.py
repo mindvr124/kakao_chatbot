@@ -516,4 +516,63 @@ def get_check_response_message(check_score: int) -> str:
     elif 9 <= check_score <= 10:
         return "지금 상황이 매우 심각해 보여. 즉시 도움을 받아야 해.\n• 자살예방 상담전화 1393 (24시간)\n• 정신건강 위기상담 1577-0199\n• 긴급상황: 112/119\n혼자가 아니야. 지금 당장 연락해줘."
     else:
-        return "응답을 이해하지 못했어. 다시 한 번 0부터 10까지의 숫자로 답해줘."
+        return "다시 한 번 0부터 10까지 숫자로 알려줄래? 예: 0, 1, 2 ..."
+
+def process_check_question_response(response_text: str, risk_history: RiskHistory = None) -> Tuple[Optional[int], str]:
+    """
+    체크 질문 응답을 처리하고 점수와 대응 메시지를 반환합니다.
+    
+    Args:
+        response_text: 사용자의 체크 질문 응답 텍스트
+        risk_history: 위험도 히스토리 객체 (제공시 상태 업데이트)
+    
+    Returns:
+        Tuple[Optional[int], str]: (파싱된 점수, 대응 메시지)
+    """
+    logger.info(f"[PROCESS_CHECK] 체크 질문 응답 처리 시작: '{response_text}', risk_history={risk_history is not None}")
+    
+    # 점수 파싱
+    parsed_score = parse_check_response(response_text)
+    
+    if parsed_score is not None:
+        # RiskHistory가 제공된 경우 상태 업데이트
+        if risk_history:
+            risk_history.process_check_question_response(response_text)
+            logger.info(f"[PROCESS_CHECK] RiskHistory 상태 업데이트 완료: last_check_score={risk_history.last_check_score}")
+        
+        # 대응 메시지 생성
+        response_message = get_check_response_message(parsed_score)
+        
+        logger.info(f"[PROCESS_CHECK] 체크 질문 응답 처리 완료: score={parsed_score}, message_length={len(response_message)}")
+        
+        return parsed_score, response_message
+    else:
+        # 파싱 실패시 재질문 메시지
+        invalid_message = get_invalid_score_message()
+        
+        logger.info(f"[PROCESS_CHECK] 체크 질문 응답 파싱 실패: 재질문 메시지 반환")
+        
+        return None, invalid_message
+
+def is_check_question_response(text: str) -> bool:
+    """
+    텍스트가 체크 질문에 대한 응답인지 확인합니다.
+    
+    Args:
+        text: 확인할 텍스트
+        
+    Returns:
+        bool: 체크 질문 응답이면 True, 아니면 False
+    """
+    if not text:
+        return False
+    
+    # 점수 파싱 시도
+    parsed_score = parse_check_response(text)
+    
+    # 파싱이 성공하면 체크 질문 응답으로 간주
+    is_response = parsed_score is not None
+    
+    logger.info(f"[CHECK_RESPONSE_DETECT] 체크 질문 응답 감지: text='{text[:20]}...', is_response={is_response}, parsed_score={parsed_score}")
+    
+    return is_response
