@@ -467,6 +467,12 @@ async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> 
         risk_state.score = score
         risk_state.last_updated = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
         
+        # check_question_turn도 함께 감소 (0.5씩 감소하여 턴마다 총 1씩 감소)
+        if risk_state.check_question_turn > 0:
+            old_turn = risk_state.check_question_turn
+            risk_state.check_question_turn = max(0, risk_state.check_question_turn - 0.5)
+            logger.info(f"[RISK_DB] 점수 저장 시 턴 카운트 감소: {old_turn} -> {risk_state.check_question_turn}")
+        
         logger.info(f"[RISK_DB] 점수 및 시간 업데이트 완료: score={risk_state.score}, last_updated={risk_state.last_updated}")
         
         try:
