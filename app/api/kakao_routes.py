@@ -480,7 +480,7 @@ NAME_ALLOWED = re.compile(r"^[가-힣a-zA-Z0-9·\-\_]{1,20}$")
 def clean_name(s: str) -> str:
     s = s.strip()
     # 양쪽 따옴표/괄호/장식 제거
-    s = re.sub(r'[\"\'“”‘’()\[\]{}<>…~]+', "", s)
+    s = re.sub(r'[\"\'"“"‘'()\[\]{}<>…~]+', "", s)
     return s.strip()
 
 def is_valid_name(s: str) -> bool:
@@ -996,7 +996,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 # 체크 응답을 받았으므로, 반드시 turn_count를 0으로 리셋하여 재질문이 반복되지 않도록 한다
                 user_risk_history.check_question_turn_count = 0
                 logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 리셋: 0 (체크 질문 완료)")
-
+                
+                # 체크 질문 응답 점수도 리셋하여 AI가 일반 대화로 진행하도록 함
+                user_risk_history.last_check_score = None
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 리셋: None (일반 대화 진행)")
+                
                 # 9-10점: 즉시 안전 응답
                 if check_score >= 9:
                     logger.info(f"[CHECK] 위험도 9-10점: 즉시 안전 응답 발송")
