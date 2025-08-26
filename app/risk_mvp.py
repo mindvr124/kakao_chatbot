@@ -36,11 +36,11 @@ class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
     
     def __init__(self, max_turns: int = 20):
+        self.turns = deque(maxlen=max_turns)
         self.max_turns = max_turns
-        self.turns: deque = deque(maxlen=max_turns)
         self.last_updated = datetime.now()
-        self.check_question_turn_count = 0  # 체크 질문 발동 후 턴 카운트
-        self.last_check_score = None  # 최근 체크 질문 응답 점수
+        self.check_question_turn_count = 0
+        self.last_check_score = None
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
@@ -136,20 +136,20 @@ class RiskHistory:
         if self.check_question_turn_count > 0 and self.check_question_turn_count <= 20:
             # 예외: 5턴 이내 자살 플래그 10점이 넘어가면 발송 가능
             if self.check_question_turn_count <= 5:
-                recent_turns = list(self.turns)[-5:]  # 최근 5턴 확인
+                # 최근 5턴에서 10점 이상인 턴이 있는지 확인
+                recent_turns = list(self.turns)[-5:]
                 high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
-                
                 if high_risk_turns:
-                    high_risk_details = [f"턴{turn['score']}점('{turn['text'][:20]}...')" for turn in high_risk_turns]
-                    logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 감지: {len(high_risk_turns)}턴, 상세: {' | '.join(high_risk_details)}, 체크 질문 발송 허용")
+                    logger.info(f"[RISK_HISTORY] 예외 조건 충족: 5턴 이내 고위험 점수 {len(high_risk_turns)}개 발견, 체크 질문 발송 가능")
                     return True
                 else:
                     logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 없음, 체크 질문 발송 불가")
             
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 이내, 예외 조건 미충족)")
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 제한)")
             return False
         
-        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 초과)")
+        # 20턴이 지났으면 발송 가능
+        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 경과)")
         return True
     
     def _analyze_single_turn(self, text: str) -> Dict:
