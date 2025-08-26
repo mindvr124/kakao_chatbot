@@ -956,45 +956,58 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         except Exception as e:
             logger.warning(f"[RISK_SYNC] check_question_turn_count 동기화 실패: {e}")
         
-        risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
-        logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
-        
-        # 누적 점수 계산 (히스토리 기반)
-        cumulative_score = user_risk_history.get_cumulative_score()
-        logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
-        
-        # 히스토리 상태 상세 로깅
-        logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
-        if user_risk_history.turns:
-            recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
-            for i, turn in enumerate(recent_turns):
-                logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
-        
-        risk_level = get_risk_level(cumulative_score)
-        logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
-        
-        # 데이터베이스에 누적 위험도 점수 저장
-        try:
-            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
-            await update_risk_score(session, user_id, cumulative_score)
-            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
-        except Exception as e:
-            logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
-            import traceback
-            logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
-        
-        # 위험도 추세 분석
-        risk_trend = user_risk_history.get_risk_trend()
-        logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
-        
         # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 경우에만 처리)
         check_score = None
+        logger.info(f"[CHECK_DEBUG] 체크 질문 응답 파싱 조건 확인: check_question_turn_count={user_risk_history.check_question_turn_count}, text='{user_text_stripped}'")
+        
         if user_risk_history.check_question_turn_count > 0:
             # 체크 질문이 발송된 상태에서만 응답 파싱 시도
             check_score = parse_check_response(user_text_stripped)
             logger.info(f"[CHECK_DEBUG] 체크 질문 발송 상태에서 응답 파싱: text='{user_text_stripped}', score={check_score}")
         else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 미발송 상태: 응답 파싱 건너뜀")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 미발송 상태: 응답 파싱 건너뜀 (turn_count=0)")
+        
+        # 체크 질문 응답이 아닌 경우에만 위험도 점수 계산
+        if check_score is None:
+            risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
+            logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
+            
+            # 누적 점수 계산 (히스토리 기반)
+            cumulative_score = user_risk_history.get_cumulative_score()
+            logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
+            
+            # 히스토리 상태 상세 로깅
+            logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
+            if user_risk_history.turns:
+                recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
+                for i, turn in enumerate(recent_turns):
+                    logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
+            
+            risk_level = get_risk_level(cumulative_score)
+            logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
+            
+            # 데이터베이스에 누적 위험도 점수 저장
+            try:
+                logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
+                await update_risk_score(session, user_id, cumulative_score)
+                logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
+            except Exception as e:
+                logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
+                import traceback
+                logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
+            
+            # 위험도 추세 분석
+            risk_trend = user_risk_history.get_risk_trend()
+            logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
+        else:
+            # 체크 질문 응답인 경우 위험도 점수 계산 건너뛰기
+            logger.info(f"[RISK_DEBUG] 체크 질문 응답이므로 위험도 점수 계산 건너뛰기: check_score={check_score}")
+            risk_score = 0
+            flags = {}
+            evidence = []
+            cumulative_score = 0
+            risk_level = "low"
+            risk_trend = "stable"
         
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
@@ -1139,6 +1152,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 user_id_str = str(user_id) if user_id else "unknown"
                 await mark_check_question_sent(session, user_id_str)
                 logger.info(f"[CHECK] 데이터베이스에 체크 질문 발송 기록 완료")
+                
+                # 체크 질문 발송 후 현재 위험도 점수 유지 (0으로 초기화하지 않음)
+                logger.info(f"[CHECK] 체크 질문 발송 후 현재 위험도 점수 유지: {cumulative_score}")
                 
                 check_questions = get_check_questions()
                 selected_question = random.choice(check_questions)
