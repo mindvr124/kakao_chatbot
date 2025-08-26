@@ -384,11 +384,6 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
         
     return JSONResponse(content=immediate, media_type="application/json; charset=utf-8")
     
-def decrement_check_question_turn_if_needed(user_risk_history):
-    """체크 질문 턴 카운트를 감소시킵니다."""
-    if user_risk_history.check_question_turn_count > 0:
-        user_risk_history.check_question_turn_count = max(0, user_risk_history.check_question_turn_count - 1)
-        logger.info(f"check_question_turn: {user_risk_history.check_question_turn_count}")
 
 """카카오 스킬 관련 라우터"""
 import asyncio
@@ -948,9 +943,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             user_risk_history.user_id = user_id
         if getattr(user_risk_history, 'db_session', None) is None:
             user_risk_history.db_session = session
-        
-        # 매 턴마다 턴 카운트 감소 (체크질문 발송 후 20턴 카운트다운)
-        decrement_check_question_turn_if_needed(user_risk_history)
         
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
