@@ -967,12 +967,36 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         cumulative_score = user_risk_history.get_cumulative_score()
         logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
         
-        # 히스토리 상태 상세 로깅
+        # 히스토리 상태 상세 로깅 및 긴급 위험도 체크
         logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
         if user_risk_history.turns:
-            recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
+            recent_turns = list(user_risk_history.turns)[-5:]  # 최근 5턴으로 확장
             for i, turn in enumerate(recent_turns):
                 logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
+            
+            # ====== [긴급 위험도 즉시 처리] ==============================================
+            # 20턴과 별개로 최근 5턴 이내에 10점 키워드가 2번 이상이면 즉시 긴급 연락처
+            if len(recent_turns) >= 2:
+                high_risk_count = sum(1 for turn in recent_turns if turn['score'] == 10)
+                logger.info(f"[URGENT] 최근 5턴 내 10점 키워드 카운트: {high_risk_count}")
+                
+                if high_risk_count >= 2:
+                    logger.info(f"[URGENT] 최근 5턴 내 10점 키워드 {high_risk_count}번 감지: 즉시 긴급 연락처")
+                    try:
+                        # user_id를 문자열로 확실하게 변환
+                        user_id_str = str(user_id) if user_id else "unknown"
+                        # conv_id가 유효한 경우에만 전달
+                        safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
+                        await save_log_message(session, "urgent_risk_trigger",
+                                            f"Urgent risk trigger: 10점 키워드 {high_risk_count}번", user_id_str, safe_conv_id,
+                                            {"source": "urgent_risk", "high_risk_count": high_risk_count, "x_request_id": x_request_id})
+                    except Exception as e:
+                        logger.warning(f"[URGENT] urgent_risk_trigger 로그 저장 실패: {e}")
+                    
+                    # 긴급 연락처 안내 후 점수 유지 (turns 초기화하지 않음)
+                    logger.info(f"[URGENT] 긴급 연락처 안내 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
+                    
+                    return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
         
         risk_level = get_risk_level(cumulative_score)
         logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
@@ -1126,12 +1150,25 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 pass
 
         # ====== [체크 질문 발송 및 위험도 처리] ==============================================
+        # 데이터베이스의 현재 score를 가져와서 체크 질문 발송 여부 결정
+        db_score = 0
+        try:
+            existing_risk = await get_risk_state(session, user_id)
+            if existing_risk:
+                db_score = existing_risk.score or 0
+                logger.info(f"[CHECK_DB] 데이터베이스 현재 score: {db_score}")
+            else:
+                logger.info(f"[CHECK_DB] 데이터베이스에 risk_state 없음, score=0으로 설정")
+        except Exception as e:
+            logger.warning(f"[CHECK_DB] 데이터베이스 score 조회 실패: {e}, score=0으로 설정")
+            db_score = 0
+        
         # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 완료된 경우에는 절대 발송하지 않음)
         # check_score가 None이 아니거나 last_check_score가 None이 아닌 경우는 이미 체크 질문 응답이 처리된 것이므로 발송하지 않음
         if (check_score is None and 
             user_risk_history.last_check_score is None and 
-            should_send_check_question(cumulative_score, user_risk_history)):
-            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: cumulative_score={cumulative_score}")
+            should_send_check_question(db_score, user_risk_history)):
+            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: db_score={db_score}, cumulative_score={cumulative_score}")
             try:
                 # RiskHistory에 체크 질문 발송 기록
                 user_risk_history.mark_check_question_sent()
@@ -1162,8 +1199,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         elif user_risk_history.last_check_score is not None:
             logger.info(f"[CHECK_DEBUG] 이전 체크 질문 응답이 있음 (last_check_score={user_risk_history.last_check_score}): 체크 질문 발송 건너뜀")
         else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}")
-            logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(cumulative_score, user_risk_history)}")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: db_score={db_score}, cumulative_score={cumulative_score}")
+            logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(db_score, user_risk_history)}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
 
@@ -1180,36 +1217,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             except Exception as e:
                 logger.warning(f"[RISK] risk_trigger 로그 저장 실패: {e}")
             
-            # 긴급 연락처 안내 후 점수 0점으로 초기화
-            try:
-                # turns만 초기화 (check_question_turn_count는 유지)
-                if user_id in _RISK_HISTORIES:
-                    _RISK_HISTORIES[user_id].turns.clear()
-                    logger.info(f"[RISK] 긴급 연락처 안내 후 turns만 초기화 완료: user_id={user_id} (turn_count 유지)")
-                
-                # 데이터베이스 점수도 0으로 업데이트
-                await update_risk_score(session, user_id, 0)
-                logger.info(f"[RISK] 긴급 연락처 안내 후 데이터베이스 점수 0점으로 초기화 완료: user_id={user_id}")
-            except Exception as e:
-                logger.warning(f"[RISK] 점수 초기화 실패: {e}")
+            # 긴급 연락처 안내 후 점수 유지 (turns 초기화하지 않음)
+            # 위험도가 높은 경우에도 turns를 유지하여 누적 위험도를 추적
+            logger.info(f"[RISK] 긴급 연락처 안내 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
             
             # 안전 응답 반환
             return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
 
-        # ====== [모든 응답 후 점수 초기화] ==============================================
-        # 모든 응답이 완료된 후 riskstate의 score를 0으로 초기화
-        try:
-            if user_id:
-                # turns만 초기화 (check_question_turn_count는 유지)
-                if user_id in _RISK_HISTORIES:
-                    _RISK_HISTORIES[user_id].turns.clear()
-                    logger.info(f"[RISK] 응답 완료 후 turns만 초기화: user_id={user_id} (turn_count 유지)")
-                
-                # 데이터베이스 점수도 0으로 업데이트
-                await update_risk_score(session, user_id, 0)
-                logger.info(f"[RISK] 응답 완료 후 데이터베이스 점수 0점으로 초기화: user_id={user_id}")
-        except Exception as e:
-            logger.warning(f"[RISK] 응답 완료 후 점수 초기화 실패: {e}")
+        # ====== [일반 대화 후 점수 유지] ==============================================
+        # 일반 대화 후에는 turns와 점수를 유지하여 누적 위험도를 추적
+        # check_question_turn_count로 20턴 동안 재질문을 방지
+        logger.info(f"[RISK] 일반 대화 완료 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
 
         # ====== [이름 플로우 처리] ==============================================
         # 이름 관련 플로우 처리 (conv_id 전달)
