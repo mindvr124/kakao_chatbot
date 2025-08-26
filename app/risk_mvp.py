@@ -122,6 +122,11 @@ class RiskHistory:
     
     def can_send_check_question(self) -> bool:
         """체크 질문을 발송할 수 있는지 확인합니다."""
+        # check_question_turn_count가 0이면 체크 질문 발송 가능
+        if self.check_question_turn_count == 0:
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (초기 상태)")
+            return True
+        
         # 체크 질문 발동 후 20턴이 지나지 않았으면 발송 불가
         if self.check_question_turn_count > 0 and self.check_question_turn_count <= 20:
             # 예외: 5턴 이내 자살 플래그 10점이 넘어가면 발송 가능
@@ -139,7 +144,7 @@ class RiskHistory:
             logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 이내, 예외 조건 미충족)")
             return False
         
-        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count}")
+        logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count} (20턴 초과)")
         return True
     
     def _analyze_single_turn(self, text: str) -> Dict:
@@ -362,8 +367,13 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
         can_send = risk_history.can_send_check_question()
         logger.info(f"[CHECK_CONDITION] RiskHistory 조건 확인: can_send={can_send}, check_question_turn_count={risk_history.check_question_turn_count}")
         
-        # 예외 조건: 5턴 이내 자살 플래그 10점 이상이면 강제 발송
-        if not can_send and risk_history.check_question_turn_count <= 5:
+        # can_send가 True면 바로 반환
+        if can_send:
+            logger.info(f"[CHECK_CONDITION] can_send가 True이므로 체크 질문 발송 가능")
+            return True
+        
+        # can_send가 False이고 check_question_turn_count <= 5일 때 예외 조건 확인
+        if risk_history.check_question_turn_count <= 5:
             recent_turns = list(risk_history.turns)[-5:]  # 최근 5턴 확인
             high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
             
@@ -374,7 +384,8 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
             else:
                 logger.info(f"[CHECK_CONDITION] 예외 조건 미충족: 5턴 이내 자살 플래그 10점 이상 없음")
         
-        return can_send
+        logger.info(f"[CHECK_CONDITION] can_send가 False이고 예외 조건도 미충족하므로 체크 질문 발송 불가")
+        return False
     
     # RiskHistory가 없는 경우 기본 점수 조건만 확인
     logger.info(f"[CHECK_CONDITION] RiskHistory 없음, 기본 점수 조건만 확인")
@@ -383,14 +394,16 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
 def get_check_questions() -> List[str]:
     """체크 질문 목록을 반환합니다."""
     return [
-        "지금 마음 상태를 0~10으로 표현해줄래? (0=괜찮음, 10=당장 위험한 상태)",
-        "너무 힘들어 보여서 확인하고 싶어. 0~10으로 표현해줘. (0=안정, 10=매우 위험)",
-        "네가 얼마나 힘든지 알고 싶어. 0~10으로 말해줘. (0=괜찮음, 10=위험)"
+        "지금 마음 상태를 0~10으로 표현해줄래? (0=안정, 10=불안)",
+        "네가 얼마나 힘든지 알고 싶어. 지금 상태를 0~10의 숫자로 말해줄래? (0=안정, 10=불안)",
+        "네가 얼마나 힘든지 알고 싶어. 0~10의 숫자로 표현해줄 수 있을까? (0=안정, 10=불안)"
     ]
 
 def get_invalid_score_message() -> str:
     """잘못된 점수 입력에 대한 재질문 메시지를 반환합니다."""
-    return "0부터 10까지의 숫자로 답해줘. 예: 1, 2, 3, 1점, 2점 등"
+    return ["0부터 10까지 숫자로 편하게 말해줄래? 예: 0, 1, 2, 1점, 2점",
+    "숫자로 표현해주면 내가 더 잘 이해할 수 있어. 0~10 중에서 말해줘. 예: 0, 1, 2 ...",
+    "다시 한 번 숫자로만 알려줄래? 예: 0, 1, 2 ..."]
 
 def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""
