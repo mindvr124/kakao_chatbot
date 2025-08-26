@@ -890,7 +890,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         user_text_stripped = user_text.strip()
 
         # ====== [대화 세션 생성] ==============================================
-        # 대화 세션을 먼저 생성하여 conv_id 확보
+        # 대화 세션을 먼저 생성하여 conv_id 확보 (모든 로깅·저장에서 사용)
         try:
             conv = await get_or_create_conversation(session, user_id)
             conv_id = conv.conv_id
@@ -1045,7 +1045,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 7-8점 응답 메시지: {response_message}")
-                    logger.info(f"[CHECK] 7-8점 응답 처리 완료, 일반 AI 응답으로 이어감")
+                    logger.info(f"[CHECK] 7-8점 응답 처리 완료, 메시지 반환")
+                    return kakao_text(response_message)
                 
                 # 0-6점: 일반 대응 메시지 후 정상 대화 진행
                 else:
@@ -1062,10 +1063,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as log_err:
                         logger.warning(f"Normal check response log save failed: {log_err}")
                     
-                    # 0-6점 응답 메시지 생성 (반환하지 않음)
                     response_message = get_check_response_message(check_score)
                     logger.info(f"[CHECK] 0-6점 응답 메시지: {response_message}")
-                    logger.info(f"[CHECK] 0-6점 응답 처리 완료, 일반 AI 응답으로 이어감")
+                    logger.info(f"[CHECK] 0-6점 응답 처리 완료, 메시지 반환")
+                    return kakao_text(response_message)
                     
             except Exception as e:
                 logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
@@ -1074,18 +1075,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             # 체크 질문 응답이 아니거나 유효하지 않은 경우
             # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우
             if user_risk_history.check_question_turn_count > 0:
-                # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 체크 질문을 취소하고 일반 대화로 진행
-                logger.info(f"[CHECK] 체크 질문 응답이 아님: '{user_text_stripped}' -> 체크 질문 취소하고 일반 대화로 진행")
-                
-                # 체크 질문 상태 초기화
-                user_risk_history.check_question_turn_count = 0
-                user_risk_history.last_check_score = None
-                logger.info(f"[CHECK] 체크 질문 취소 후 상태 초기화: turn_count=0, last_check_score=None")
-                
-                # 일반 대화로 진행 (AI 응답 생성)
-                pass
+                # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 숫자만 재요청
+                logger.info(f"[CHECK] 무효 응답 -> 숫자 0~10만 다시 요청(상태 유지)")
+                # 재요청 상태 유지 (check_question_turn_count는 그대로 유지)
+                # 다음 입력에서 다시 체크 질문 응답 파싱 시도
+                return kakao_text("0~10 중 숫자 하나로만 답해줘!")
             else:
                 logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
+                # 일반 대화로 진행 (AI 응답 생성)
+                pass
 
         # ====== [체크 질문 발송 및 위험도 처리] ==============================================
         # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 완료된 경우에는 절대 발송하지 않음)

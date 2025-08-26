@@ -110,6 +110,24 @@ async def save_message(
     user_id: str | None = None,
 ) -> Message:
     try:
+        # conv_id가 None이면 재조회 시도
+        if conv_id is None and user_id:
+            try:
+                from app.database.models import Conversation as DBConversation
+                from sqlalchemy import select
+                stmt = select(DBConversation).where(DBConversation.user_id == user_id).order_by(DBConversation.created_at.desc()).limit(1)
+                result = await session.execute(stmt)
+                conv_obj = result.scalar_one_or_none()
+                if conv_obj:
+                    conv_id = conv_obj.conv_id
+                    logger.info(f"[SAVE_MESSAGE] conv_id 재조회 완료: {conv_id}")
+                else:
+                    logger.warning(f"[SAVE_MESSAGE] 사용자의 대화 세션을 찾을 수 없음: {user_id}")
+                    raise ValueError(f"No conversation found for user: {user_id}")
+            except Exception as e:
+                logger.error(f"[SAVE_MESSAGE] conv_id 재조회 실패: {e}")
+                raise ValueError(f"Failed to retrieve conv_id for user: {user_id}")
+        
         # temp_로 시작하는 conv_id는 처리하지 않음
         if conv_id and str(conv_id).startswith("temp_"):
             logger.warning(f"[SAVE_MESSAGE] Skipping temp conv_id: {conv_id}")
