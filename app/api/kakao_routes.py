@@ -993,9 +993,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 guidance = get_check_response_guidance(check_score)
                 logger.info(f"[CHECK] 대응 가이드: {guidance}")
 
-                # 체크 응답을 받았으므로, 반드시 turn_count를 20으로 설정하여 20턴 동안 재질문을 방지한다
-                user_risk_history.check_question_turn_count = 20  # 20턴 카운트다운 시작
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 20 (20턴 카운트다운 시작)")
+                # 체크 응답을 받았으므로, 영구적으로 체크 질문을 차단한다
+                user_risk_history.check_question_turn_count = 999  # 영구 차단 (999턴)
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 999 (영구 차단)")
                 
                 # 체크 질문 응답 후 모든 위험도 점수 초기화
                 try:
@@ -1010,9 +1010,13 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 except Exception as e:
                     logger.warning(f"[CHECK] 위험도 점수 초기화 실패: {e}")
                 
-                # 체크 질문 응답 점수도 리셋하여 AI가 일반 대화로 진행하도록 함
-                user_risk_history.last_check_score = None
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 리셋: None (일반 대화 진행)")
+                # 체크 질문 응답 점수는 유지하여 중복 응답을 방지한다
+                # user_risk_history.last_check_score = None  # 이 줄 제거
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 유지: {check_score} (중복 응답 방지)")
+                
+                # 체크 질문 응답 후 turn_count를 20으로 설정하여 20턴 동안 재질문 방지
+                user_risk_history.check_question_turn_count = 20
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 20 (20턴 카운트다운 시작)")
                 
                 # 9-10점: 즉시 안전 응답
                 if check_score >= 9:
@@ -1165,6 +1169,21 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
             # 안전 응답 반환
             return JSONResponse(content=_safe_reply_kakao(risk_level), media_type="application/json; charset=utf-8")
+
+        # ====== [모든 응답 후 점수 초기화] ==============================================
+        # 모든 응답이 완료된 후 riskstate의 score를 0으로 초기화
+        try:
+            if user_id:
+                # RiskHistory 초기화
+                if user_id in _RISK_HISTORIES:
+                    _RISK_HISTORIES[user_id].turns.clear()
+                    logger.info(f"[RISK] 응답 완료 후 RiskHistory 초기화: user_id={user_id}")
+                
+                # 데이터베이스 점수도 0으로 업데이트
+                await update_risk_score(session, user_id, 0)
+                logger.info(f"[RISK] 응답 완료 후 데이터베이스 점수 0점으로 초기화: user_id={user_id}")
+        except Exception as e:
+            logger.warning(f"[RISK] 응답 완료 후 점수 초기화 실패: {e}")
 
         # ====== [이름 플로우 처리] ==============================================
         # 이름 관련 플로우 처리 (conv_id 전달)
