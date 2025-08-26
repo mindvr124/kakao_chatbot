@@ -8,10 +8,10 @@ from loguru import logger
 # 점수별 정규식 패턴 정의
 RISK_PATTERNS = {
     10: [  # 직접적, 구체적 자살 의도 및 수단 언급
-        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽으면\s*편하|뛰어내리다|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
+        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶)"),
     ],
     7: [   # 간접적 자살 사고 표현
-        re.compile(r"(살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기할래|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
+        re.compile(r"(살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기\s*할래|포기\s*하|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
     ],
     4: [   # 자존감 저하·학대·왕따 등
         re.compile(r"(쓸모\s*없|필요\s*없|잘못된\s*사람|아무것도\s*못\s*해|내\s*탓|내가\s*문제|맞았어|괴롭힘|왕따|따돌림|욕설|부모\s*맞았|무서워|때리|때려|몽둥이|폭력)")
@@ -123,7 +123,19 @@ class RiskHistory:
         """체크 질문을 발송할 수 있는지 확인합니다."""
         # 체크 질문 발동 후 20턴이 지나지 않았으면 발송 불가
         if self.check_question_turn_count > 0 and self.check_question_turn_count <= 20:
-            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 이내)")
+            # 예외: 5턴 이내 자살 플래그 10점이 넘어가면 발송 가능
+            if self.check_question_turn_count <= 5:
+                recent_turns = list(self.turns)[-5:]  # 최근 5턴 확인
+                high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
+                
+                if high_risk_turns:
+                    high_risk_details = [f"턴{turn['score']}점('{turn['text'][:20]}...')" for turn in high_risk_turns]
+                    logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 감지: {len(high_risk_turns)}턴, 상세: {' | '.join(high_risk_details)}, 체크 질문 발송 허용")
+                    return True
+                else:
+                    logger.info(f"[RISK_HISTORY] 5턴 이내 자살 플래그 10점 이상 없음, 체크 질문 발송 불가")
+            
+            logger.info(f"[RISK_HISTORY] 체크 질문 발송 불가: check_question_turn_count={self.check_question_turn_count} (20턴 이내, 예외 조건 미충족)")
             return False
         
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능: check_question_turn_count={self.check_question_turn_count}")
@@ -348,6 +360,19 @@ def should_send_check_question(score: int, risk_history: RiskHistory = None) -> 
     if risk_history:
         can_send = risk_history.can_send_check_question()
         logger.info(f"[CHECK_CONDITION] RiskHistory 조건 확인: can_send={can_send}, check_question_turn_count={risk_history.check_question_turn_count}")
+        
+        # 예외 조건: 5턴 이내 자살 플래그 10점 이상이면 강제 발송
+        if not can_send and risk_history.check_question_turn_count <= 5:
+            recent_turns = list(risk_history.turns)[-5:]  # 최근 5턴 확인
+            high_risk_turns = [turn for turn in recent_turns if turn['score'] >= 10]
+            
+            if high_risk_turns:
+                high_risk_details = [f"턴{turn['score']}점('{turn['text'][:20]}...')" for turn in high_risk_turns]
+                logger.info(f"[CHECK_CONDITION] 예외 조건 충족: 5턴 이내 자살 플래그 10점 이상 {len(high_risk_turns)}턴, 상세: {' | '.join(high_risk_details)}, 체크 질문 강제 발송")
+                return True
+            else:
+                logger.info(f"[CHECK_CONDITION] 예외 조건 미충족: 5턴 이내 자살 플래그 10점 이상 없음")
+        
         return can_send
     
     # RiskHistory가 없는 경우 기본 점수 조건만 확인
@@ -364,7 +389,7 @@ def get_check_questions() -> List[str]:
 
 def get_invalid_score_message() -> str:
     """잘못된 점수 입력에 대한 재질문 메시지를 반환합니다."""
-    return "0부터 10까지의 정수만 입력해줘~"
+    return "0부터 10까지의 숫자로 답해줘. 예: 1, 2, 3, 1점, 2점 등"
 
 def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""
@@ -383,6 +408,19 @@ def parse_check_response(text: str) -> Optional[int]:
         score = int(exact_match.group())
         logger.info(f"[PARSE_DEBUG] 정확한 점수 매칭: {score}")
         return score
+    
+    # "1점", "2점", "1 점" 등의 패턴 매칭
+    point_pattern = re.match(r'^(\d+)\s*점?$', text_clean)
+    if point_pattern:
+        score = int(point_pattern.group(1))
+        logger.info(f"[PARSE_DEBUG] 점수 패턴 매칭: {score}점")
+        
+        # 0~10 범위 검증
+        if 0 <= score <= 10:
+            logger.info(f"[PARSE_DEBUG] 유효한 점수 확인: {score}")
+            return score
+        else:
+            logger.info(f"[PARSE_DEBUG] 점수 범위 초과: {score} (0-10 범위 아님)")
     
     # 숫자만 추출하여 확인 (fallback)
     numbers = re.findall(r'\b([0-9]|10)\b', text_clean)

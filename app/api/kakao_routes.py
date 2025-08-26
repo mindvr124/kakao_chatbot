@@ -257,7 +257,8 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     conv_id=conv_id_value,
                     user_input=user_text,
                     prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
-                    user_id=user_id
+                    user_id=user_id,
+                    request_id=request_id
                 )
                 await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
                 try:
@@ -310,7 +311,8 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                 conv_id=quick_conv_id,
                 user_input=user_text,
                 prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
-                user_id=user_id
+                user_id=user_id,
+                request_id=request_id
             ),
             timeout=time_left,
         )
@@ -689,7 +691,8 @@ async def handle_name_flow(
                     conv_id=conv.conv_id,
                     user_input=user_text,
                     prompt_name="default",  # 이름 플로우에서는 기본 프롬프트 사용
-                    user_id=user_id
+                    user_id=user_id,
+                    request_id=x_request_id
                 )
                 
                 logger.info(f"\n[AI생성] AI 응답 생성: {ai_response[:100]}...")
@@ -1046,6 +1049,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     user_risk_history.check_question_turn_count = CHECK_QUESTION_TURN_COUNT
                     logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: {CHECK_QUESTION_TURN_COUNT} (체크 질문 발송 금지)")
                     
+                    # 0-6점 응답 메시지 반환
+                    response_message = get_check_response_message(check_score)
+                    logger.info(f"[CHECK] 0-6점 응답 메시지: {response_message}")
+                    return kakao_text(response_message)
+                    
             except Exception as e:
                 logger.error(f"[CHECK] 체크 응답 저장 실패: {e}")
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
@@ -1182,7 +1190,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                         conv_id=conv_id,
                         user_input=user_text,
                         prompt_name=risk_based_prompt,
-                        user_id=user_id
+                        user_id=user_id,
+                        request_id=x_request_id
                     ),
                     timeout=AI_GENERATION_TIMEOUT,
                 )

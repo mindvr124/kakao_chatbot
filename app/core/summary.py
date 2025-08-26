@@ -193,7 +193,7 @@ async def maybe_rollup_user_summary(
             "- 기존 요약의 중요한 내용은 유지\n- 중복 문장 제거\n- 핵심만 간결히\n"
             f"\n[기존 사용자 요약]\n{existing_summary}\n\n[최근 대화]\n{history_text}"
         )
-        merged_text, _ = await ai_service.generate_response(session, None, prompt, "default", user_id)
+        merged_text, _ = await ai_service.generate_response(session, None, prompt, "default", user_id, None)
     except Exception as e:
         logger.warning(f"롤업 요약 생성 실패: {e}")
         try:

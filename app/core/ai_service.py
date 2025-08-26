@@ -231,7 +231,7 @@ class AIService:
         return messages
 
     @traceable
-    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None) -> tuple[str, int]:
+    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None, request_id: Optional[str] = None) -> tuple[str, int]:
         """Chat Completions로 전체 히스토리와 요약(지난번 대화)을 포함한 답변을 생성합니다."""
         try:
             # 이름 추출은 kakao_routes.py에서 처리하므로 여기서는 제거
@@ -334,7 +334,8 @@ class AIService:
                     user_id=user_id,
                     role=MessageRole.ASSISTANT,
                     content=content,
-                    tokens=tokens_used
+                    tokens=tokens_used,
+                    request_id=request_id
                 )
                 session.add(msg)
                 await session.commit()
@@ -366,7 +367,7 @@ class AIService:
             logger.error(f"OpenAI API error: {e}")
             return "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요.", 0
 
-    async def generate_simple_response(self, user_input: str) -> str:
+    async def generate_simple_response(self, user_input: str, request_id: Optional[str] = None) -> str:
         """데이터베이스 없이 간단한 AI 답변을 생성합니다"""
         try:
             # API 키가 없으면 기본 답변
