@@ -916,7 +916,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 existing_risk = await get_risk_state(session, user_id)
                 if existing_risk and existing_risk.score > 0:
                     # 기존 점수가 있으면 초기 턴으로 복원
-                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20)
+                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, user_id=user_id, db_session=session)
                     # 기존 점수를 첫 번째 턴으로 추가 (가상의 턴으로 복원)
                     virtual_turn = {
                         'text': f"[복원된_기존_점수:{existing_risk.score}점]",
@@ -928,15 +928,20 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     _RISK_HISTORIES[user_id].turns.append(virtual_turn)
                     logger.info(f"[RISK_DEBUG] 기존 점수 복원 완료: user_id={user_id}, score={existing_risk.score}, turns_count={len(_RISK_HISTORIES[user_id].turns)}")
                 else:
-                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20)
+                    _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, user_id=user_id, db_session=session)
                     logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성: user_id={user_id}")
             except Exception as e:
                 logger.warning(f"[RISK_DEBUG] 기존 점수 복원 실패: {e}")
-                _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20)
+                _RISK_HISTORIES[user_id] = RiskHistory(max_turns=20, user_id=user_id, db_session=session)
                 logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성 (복원 실패): user_id={user_id}")
         
         user_risk_history = _RISK_HISTORIES[user_id]
         logger.info(f"[RISK_DEBUG] RiskHistory 객체 확인: {type(user_risk_history)}, max_turns={user_risk_history.max_turns}, turns_count={len(user_risk_history.turns)}")
+        # 누락된 경우 주입하여 DB 동기화 활성화
+        if getattr(user_risk_history, 'user_id', None) is None:
+            user_risk_history.user_id = user_id
+        if getattr(user_risk_history, 'db_session', None) is None:
+            user_risk_history.db_session = session
         
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
