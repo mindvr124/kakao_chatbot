@@ -1066,28 +1066,27 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
         else:
             # 체크 질문 응답이 아니거나 유효하지 않은 경우
-            # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우 재질문
+            # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우
             if user_risk_history.check_question_turn_count > 0:
-                logger.info(f"[CHECK] 유효하지 않은 체크 응답: '{user_text_stripped}' -> 재질문")
-                try:
-                    # conv_id가 유효한 경우에만 전달
-                    safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
-                    await save_log_message(session, "check_response_invalid",
-                                        f"Invalid check response: '{user_text_stripped}'", str(user_id), safe_conv_id,
-                                        {"source": "check_response", "invalid_input": user_text_stripped, "x_request_id": x_request_id})
-                except Exception as log_err:
-                    logger.warning(f"Invalid check response log save failed: {log_err}")
+                # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 체크 질문을 취소하고 일반 대화로 진행
+                logger.info(f"[CHECK] 체크 질문 응답이 아님: '{user_text_stripped}' -> 체크 질문 취소하고 일반 대화로 진행")
                 
-                # 재질문 메시지 반환
-                invalid_message = get_invalid_score_message()
-                return kakao_text(invalid_message)
+                # 체크 질문 상태 초기화
+                user_risk_history.check_question_turn_count = 0
+                user_risk_history.last_check_score = None
+                logger.info(f"[CHECK] 체크 질문 취소 후 상태 초기화: turn_count=0, last_check_score=None")
+                
+                # 일반 대화로 진행 (AI 응답 생성)
+                pass
             else:
                 logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
 
         # ====== [체크 질문 발송 및 위험도 처리] ==============================================
-        # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
-        # check_score가 None이 아닌 경우는 이미 체크 질문 응답이 처리된 것이므로 발송하지 않음
-        if check_score is None and should_send_check_question(cumulative_score, user_risk_history):
+        # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 완료된 경우에는 절대 발송하지 않음)
+        # check_score가 None이 아니거나 last_check_score가 None이 아닌 경우는 이미 체크 질문 응답이 처리된 것이므로 발송하지 않음
+        if (check_score is None and 
+            user_risk_history.last_check_score is None and 
+            should_send_check_question(cumulative_score, user_risk_history)):
             logger.info(f"[CHECK] 체크 질문 발송 조건 충족: cumulative_score={cumulative_score}")
             try:
                 # RiskHistory에 체크 질문 발송 기록
@@ -1111,13 +1110,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
                 import traceback
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
-        elif check_score is None:
+        elif check_score is not None:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 이미 처리됨 (check_score={check_score}): 체크 질문 발송 건너뜀")
+        elif user_risk_history.last_check_score is not None:
+            logger.info(f"[CHECK_DEBUG] 이전 체크 질문 응답이 있음 (last_check_score={user_risk_history.last_check_score}): 체크 질문 발송 건너뜀")
+        else:
             logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}")
             logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(cumulative_score, user_risk_history)}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
-        else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 이미 처리됨 (check_score={check_score}): 체크 질문 발송 건너뜀")
 
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
