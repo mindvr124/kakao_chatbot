@@ -480,7 +480,7 @@ NAME_ALLOWED = re.compile(r"^[가-힣a-zA-Z0-9·\-\_]{1,20}$")
 def clean_name(s: str) -> str:
     s = s.strip()
     # 양쪽 따옴표/괄호/장식 제거
-    s = re.sub(r'[\"\'"“"‘'()\[\]{}<>…~]+', "", s)
+    s = re.sub(r'[\"\'“”‘’()\[\]{}<>…~]+', "", s)
     return s.strip()
 
 def is_valid_name(s: str) -> bool:
