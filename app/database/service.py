@@ -180,6 +180,7 @@ async def save_prompt_log(
     session: AsyncSession,
     msg_id: UUID,  # Message와 1:1 관계 (primary key, 필수)
     conv_id,
+    user_id: str | None = None,  # user_id 추가
     model: str | None = None,
     prompt_name: str | None = None,
     temperature: float | None = None,
@@ -202,6 +203,15 @@ async def save_prompt_log(
             msg_id=msg_id  # primary key로 사용
         )
         session.add(log)
+        
+        # 프롬프트 로그 저장 후 check_question_turn 감소 (턴마다 1씩)
+        if user_id:
+            try:
+                await decrement_check_question_turn_once(user_id)
+                logger.info(f"[PROMPT_LOG] check_question_turn 감소 완료: user_id={user_id}")
+            except Exception as e:
+                logger.warning(f"[PROMPT_LOG] check_question_turn 감소 실패: {e}")
+        
         await session.commit()
         return True
     except Exception:
@@ -467,12 +477,6 @@ async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> 
         risk_state.score = score
         risk_state.last_updated = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
         
-        # check_question_turn도 함께 감소 (0.5씩 감소하여 턴마다 총 1씩 감소)
-        if risk_state.check_question_turn > 0:
-            old_turn = risk_state.check_question_turn
-            risk_state.check_question_turn = max(0, risk_state.check_question_turn - 0.5)
-            logger.info(f"[RISK_DB] 점수 저장 시 턴 카운트 감소: {old_turn} -> {risk_state.check_question_turn}")
-        
         logger.info(f"[RISK_DB] 점수 및 시간 업데이트 완료: score={risk_state.score}, last_updated={risk_state.last_updated}")
         
         try:
@@ -513,6 +517,34 @@ async def mark_check_question_sent(session: AsyncSession, user_id: str) -> None:
         except Exception:
             pass
         raise
+
+async def decrement_check_question_turn_once(user_id: str) -> None:
+    """턴마다 check_question_turn을 1씩만 감소시킵니다 (0 밑으로 내려가지 않음)."""
+    try:
+        # 별도 세션을 사용하여 턴 카운트 감소
+        from app.database.db import get_session
+        async for session in get_session():
+            try:
+                risk_state = await get_or_create_risk_state(session, user_id)
+                if risk_state.check_question_turn > 0:
+                    old_turn = risk_state.check_question_turn
+                    risk_state.check_question_turn = max(0, risk_state.check_question_turn - 1)
+                    logger.info(f"[RISK_DB] 턴마다 턴 카운트 감소: {old_turn} -> {risk_state.check_question_turn}")
+                    
+                    await session.commit()
+                    logger.info(f"[RISK_DB] 턴 카운트 감소 커밋 성공")
+                    return
+            except Exception as e:
+                logger.error(f"[RISK_DB] 턴 카운트 감소 실패: {e}")
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                break
+        
+        logger.error(f"[RISK_DB] decrement_check_question_turn_once: 모든 세션에서 실패")
+    except Exception as e:
+        logger.error(f"[RISK_DB] decrement_check_question_turn_once 전체 실패: {e}")
 
 async def decrement_check_question_turn(session: AsyncSession, user_id: str) -> None:
     """체크 질문 턴 카운트를 1 감소시킵니다 (0 밑으로 내려가지 않음)."""

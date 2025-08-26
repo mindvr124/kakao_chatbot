@@ -29,6 +29,7 @@ from app.database.service import (
     update_check_response,
     update_risk_score,
     upsert_user,
+    decrement_check_question_turn_once,
 )
 from app.utils.utils import (
     extract_callback_url,
@@ -946,6 +947,13 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
+        
+        # 턴마다 check_question_turn 1씩 감소 (1번만)
+        try:
+            await decrement_check_question_turn_once(session, user_id)
+            logger.info(f"[TURN] check_question_turn 1씩 감소 완료")
+        except Exception as e:
+            logger.warning(f"[TURN] check_question_turn 감소 실패: {e}")
         
         # 누적 점수 계산 (히스토리 기반)
         cumulative_score = user_risk_history.get_cumulative_score()
