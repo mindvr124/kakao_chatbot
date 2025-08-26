@@ -1093,6 +1093,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         # ====== [체크 질문 발송 및 위험도 처리] ==============================================
         # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 아닌 경우에만)
+        # check_score가 None이 아닌 경우는 이미 체크 질문 응답이 처리된 것이므로 발송하지 않음
         if check_score is None and should_send_check_question(cumulative_score, user_risk_history):
             logger.info(f"[CHECK] 체크 질문 발송 조건 충족: cumulative_score={cumulative_score}")
             try:
@@ -1122,6 +1123,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(cumulative_score, user_risk_history)}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
+        else:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 이미 처리됨 (check_score={check_score}): 체크 질문 발송 건너뜀")
 
         # 위험도가 높은 경우 안전 응답 (체크 질문 응답이 아닌 경우에만)
         if check_score is None and risk_level in ("critical", "high"):
