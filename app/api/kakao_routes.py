@@ -956,7 +956,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         except Exception as e:
             logger.warning(f"[RISK_SYNC] check_question_turn_count 동기화 실패: {e}")
         
-        risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
+        # 위험도 분석 및 히스토리에 저장
+        turn_analysis = user_risk_history.add_turn(user_text_stripped)
+        risk_score = turn_analysis['score']
+        flags = turn_analysis['flags']
+        evidence = turn_analysis['evidence']
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
         
         # 누적 점수 계산 (히스토리 기반)
