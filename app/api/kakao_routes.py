@@ -1164,10 +1164,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # 8점 이상이면 체크 질문 발송 (체크 질문 응답이 완료된 경우에는 절대 발송하지 않음)
         # check_score가 None이 아니거나 last_check_score가 None이 아닌 경우는 이미 체크 질문 응답이 처리된 것이므로 발송하지 않음
+        # cumulative_score를 사용하여 체크 질문 발송 여부 결정 (메모리 히스토리 기반)
         if (check_score is None and 
             user_risk_history.last_check_score is None and 
-            should_send_check_question(db_score, user_risk_history)):
-            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: db_score={db_score}, cumulative_score={cumulative_score}")
+            should_send_check_question(cumulative_score, user_risk_history)):
+            logger.info(f"[CHECK] 체크 질문 발송 조건 충족: cumulative_score={cumulative_score}, db_score={db_score}")
             try:
                 # RiskHistory에 체크 질문 발송 기록
                 user_risk_history.mark_check_question_sent()
@@ -1198,8 +1199,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         elif user_risk_history.last_check_score is not None:
             logger.info(f"[CHECK_DEBUG] 이전 체크 질문 응답이 있음 (last_check_score={user_risk_history.last_check_score}): 체크 질문 발송 건너뜀")
         else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: db_score={db_score}, cumulative_score={cumulative_score}")
-            logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(db_score, user_risk_history)}")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 조건 미충족: cumulative_score={cumulative_score}, db_score={db_score}")
+            logger.info(f"[CHECK_DEBUG] should_send_check_question 결과: {should_send_check_question(cumulative_score, user_risk_history)}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.check_question_turn_count: {user_risk_history.check_question_turn_count}")
             logger.info(f"[CHECK_DEBUG] user_risk_history.can_send_check_question(): {user_risk_history.can_send_check_question()}")
 
