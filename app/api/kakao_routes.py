@@ -956,20 +956,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         except Exception as e:
             logger.warning(f"[RISK_SYNC] check_question_turn_count 동기화 실패: {e}")
         
-        # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 직후에만 처리)
-        check_score = None
-        logger.info(f"[CHECK_DEBUG] 체크 질문 응답 파싱 조건 확인: check_question_turn_count={user_risk_history.check_question_turn_count}, text='{user_text_stripped}'")
-        
-        # 체크 질문이 발송된 직후에만 응답 파싱 시도 (turn_count가 20이고 last_check_score가 None인 경우)
-        if (user_risk_history.check_question_turn_count == 20 and 
-            user_risk_history.last_check_score is None):
-            # 체크 질문이 발송된 직후에만 응답 파싱 시도
-            check_score = parse_check_response(user_text_stripped)
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후 응답 파싱: text='{user_text_stripped}', score={check_score}")
-        else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후가 아니므로 응답 파싱 건너뜀: turn_count={user_risk_history.check_question_turn_count}, last_check_score={user_risk_history.last_check_score}")
-        
-        # 항상 위험도 점수 계산 (체크 질문 응답 여부와 관계없이)
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
         
@@ -1001,6 +987,19 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         risk_trend = user_risk_history.get_risk_trend()
         logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
         
+        # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 직후에만 처리)
+        check_score = None
+        logger.info(f"[CHECK_DEBUG] 체크 질문 응답 파싱 조건 확인: check_question_turn_count={user_risk_history.check_question_turn_count}, text='{user_text_stripped}'")
+        
+        # 체크 질문이 발송된 직후에만 응답 파싱 시도 (turn_count가 20이고 last_check_score가 None인 경우)
+        if (user_risk_history.check_question_turn_count == 20 and 
+            user_risk_history.last_check_score is None):
+            # 체크 질문이 발송된 직후에만 응답 파싱 시도
+            check_score = parse_check_response(user_text_stripped)
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후 응답 파싱: text='{user_text_stripped}', score={check_score}")
+        else:
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후가 아니므로 응답 파싱 건너뜀: turn_count={user_risk_history.check_question_turn_count}, last_check_score={user_risk_history.last_check_score}")
+        
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
             
@@ -1029,9 +1028,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 except Exception as e:
                     logger.warning(f"[CHECK] 위험도 점수 초기화 실패: {e}")
                 
-                # 체크 질문 응답 완료 후 last_check_score를 유지하여 재질문 방지
-                # user_risk_history.last_check_score = None  # 이 줄 제거하여 재질문 방지
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 유지: {check_score} (재질문 방지)")
+                # 체크 질문 응답 점수는 유지하여 중복 응답을 방지한다
+                # user_risk_history.last_check_score = None  # 이 줄 제거
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 유지: {check_score} (중복 응답 방지)")
                 
                 # 체크 질문 응답 후 turn_count를 20으로 설정하여 20턴 동안 재질문 방지
                 user_risk_history.check_question_turn_count = 20
@@ -1111,13 +1110,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.error(f"[CHECK] 상세 에러: {traceback.format_exc()}")
         else:
             # 체크 질문 응답이 아니거나 유효하지 않은 경우
-            # 이전에 체크 질문을 보냈고, 사용자가 응답을 시도했지만 유효하지 않은 경우
-            if user_risk_history.check_question_turn_count > 0 and user_risk_history.last_check_score is None:
+            # 체크 질문이 발송된 직후에만 무효 응답에 대한 재요청 처리
+            if (user_risk_history.check_question_turn_count == 20 and 
+                user_risk_history.last_check_score is None):
                 # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 숫자만 재요청
-                logger.info(f"[CHECK] 무효 응답 -> 숫자 0~10만 다시 요청(상태 유지)")
-                # 재요청 상태 유지 (check_question_turn_count는 그대로 유지)
-                # 다음 입력에서 다시 체크 질문 응답 파싱 시도
-            
+                logger.info(f"[CHECK] 체크 질문 발송 직후 무효 응답 -> 숫자 0~10만 다시 요청")
                 return kakao_text("0~10 중 숫자 하나로만 답해줘!")
             else:
                 logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
