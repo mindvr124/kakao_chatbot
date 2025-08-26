@@ -993,16 +993,12 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 guidance = get_check_response_guidance(check_score)
                 logger.info(f"[CHECK] 대응 가이드: {guidance}")
 
-                # 체크 응답을 받았으므로, 영구적으로 체크 질문을 차단한다
-                user_risk_history.check_question_turn_count = 999  # 영구 차단 (999턴)
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 turn_count 설정: 999 (영구 차단)")
-                
-                # 체크 질문 응답 후 모든 위험도 점수 초기화
+                # 체크 질문 응답 후 위험도 점수만 초기화 (turn_count는 유지)
                 try:
-                    # RiskHistory 초기화
+                    # turns만 초기화 (check_question_turn_count는 유지)
                     if user_id in _RISK_HISTORIES:
                         _RISK_HISTORIES[user_id].turns.clear()
-                        logger.info(f"[CHECK] 체크 질문 응답 후 RiskHistory 초기화 완료: user_id={user_id}")
+                        logger.info(f"[CHECK] 체크 질문 응답 후 turns만 초기화 완료: user_id={user_id} (turn_count 유지)")
                     
                     # 데이터베이스 점수도 0으로 업데이트
                     await update_risk_score(session, user_id, 0)
@@ -1032,10 +1028,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     
                     # 긴급 연락처 안내 후 점수 0점으로 초기화
                     try:
-                        # RiskHistory 초기화
+                        # turns만 초기화 (check_question_turn_count는 유지)
                         if user_id in _RISK_HISTORIES:
                             _RISK_HISTORIES[user_id].turns.clear()
-                            logger.info(f"[CHECK] 긴급 연락처 안내 후 RiskHistory 초기화 완료: user_id={user_id}")
+                            logger.info(f"[CHECK] 긴급 연락처 안내 후 turns만 초기화 완료: user_id={user_id} (turn_count 유지)")
                         
                         # 데이터베이스 점수도 0으로 업데이트
                         await update_risk_score(session, user_id, 0)
@@ -1156,10 +1152,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
             # 긴급 연락처 안내 후 점수 0점으로 초기화
             try:
-                # RiskHistory 초기화
+                # turns만 초기화 (check_question_turn_count는 유지)
                 if user_id in _RISK_HISTORIES:
                     _RISK_HISTORIES[user_id].turns.clear()
-                    logger.info(f"[RISK] 긴급 연락처 안내 후 RiskHistory 초기화 완료: user_id={user_id}")
+                    logger.info(f"[RISK] 긴급 연락처 안내 후 turns만 초기화 완료: user_id={user_id} (turn_count 유지)")
                 
                 # 데이터베이스 점수도 0으로 업데이트
                 await update_risk_score(session, user_id, 0)
@@ -1174,10 +1170,10 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # 모든 응답이 완료된 후 riskstate의 score를 0으로 초기화
         try:
             if user_id:
-                # RiskHistory 초기화
+                # turns만 초기화 (check_question_turn_count는 유지)
                 if user_id in _RISK_HISTORIES:
                     _RISK_HISTORIES[user_id].turns.clear()
-                    logger.info(f"[RISK] 응답 완료 후 RiskHistory 초기화: user_id={user_id}")
+                    logger.info(f"[RISK] 응답 완료 후 turns만 초기화: user_id={user_id} (turn_count 유지)")
                 
                 # 데이터베이스 점수도 0으로 업데이트
                 await update_risk_score(session, user_id, 0)
