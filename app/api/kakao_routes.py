@@ -945,6 +945,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if getattr(user_risk_history, 'db_session', None) is None:
             user_risk_history.db_session = session
         
+        # 데이터베이스의 check_question_turn 값으로 동기화
+        try:
+            from app.database.service import get_check_question_turn
+            db_turn = await get_check_question_turn(session, user_id)
+            if user_risk_history.check_question_turn_count != db_turn:
+                old_count = user_risk_history.check_question_turn_count
+                user_risk_history.check_question_turn_count = db_turn
+                logger.info(f"[RISK_SYNC] check_question_turn_count 동기화: {old_count} -> {db_turn}")
+        except Exception as e:
+            logger.warning(f"[RISK_SYNC] check_question_turn_count 동기화 실패: {e}")
+        
         risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
         logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
         
