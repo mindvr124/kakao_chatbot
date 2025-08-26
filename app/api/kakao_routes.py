@@ -956,58 +956,50 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         except Exception as e:
             logger.warning(f"[RISK_SYNC] check_question_turn_count 동기화 실패: {e}")
         
-        # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 경우에만 처리)
+        # 체크 질문 응답인지 확인 (체크 질문이 실제로 발송된 직후에만 처리)
         check_score = None
         logger.info(f"[CHECK_DEBUG] 체크 질문 응답 파싱 조건 확인: check_question_turn_count={user_risk_history.check_question_turn_count}, text='{user_text_stripped}'")
         
-        if user_risk_history.check_question_turn_count > 0:
-            # 체크 질문이 발송된 상태에서만 응답 파싱 시도
+        # 체크 질문이 발송된 직후에만 응답 파싱 시도 (turn_count가 20이고 last_check_score가 None인 경우)
+        if (user_risk_history.check_question_turn_count == 20 and 
+            user_risk_history.last_check_score is None):
+            # 체크 질문이 발송된 직후에만 응답 파싱 시도
             check_score = parse_check_response(user_text_stripped)
-            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 상태에서 응답 파싱: text='{user_text_stripped}', score={check_score}")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후 응답 파싱: text='{user_text_stripped}', score={check_score}")
         else:
-            logger.info(f"[CHECK_DEBUG] 체크 질문 미발송 상태: 응답 파싱 건너뜀 (turn_count=0)")
+            logger.info(f"[CHECK_DEBUG] 체크 질문 발송 직후가 아니므로 응답 파싱 건너뜀: turn_count={user_risk_history.check_question_turn_count}, last_check_score={user_risk_history.last_check_score}")
         
-        # 체크 질문 응답이 아닌 경우에만 위험도 점수 계산
-        if check_score is None:
-            risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
-            logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
-            
-            # 누적 점수 계산 (히스토리 기반)
-            cumulative_score = user_risk_history.get_cumulative_score()
-            logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
-            
-            # 히스토리 상태 상세 로깅
-            logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
-            if user_risk_history.turns:
-                recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
-                for i, turn in enumerate(recent_turns):
-                    logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
-            
-            risk_level = get_risk_level(cumulative_score)
-            logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
-            
-            # 데이터베이스에 누적 위험도 점수 저장
-            try:
-                logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
-                await update_risk_score(session, user_id, cumulative_score)
-                logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
-            except Exception as e:
-                logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
-                import traceback
-                logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
-            
-            # 위험도 추세 분석
-            risk_trend = user_risk_history.get_risk_trend()
-            logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
-        else:
-            # 체크 질문 응답인 경우 위험도 점수 계산 건너뛰기
-            logger.info(f"[RISK_DEBUG] 체크 질문 응답이므로 위험도 점수 계산 건너뛰기: check_score={check_score}")
-            risk_score = 0
-            flags = {}
-            evidence = []
-            cumulative_score = 0
-            risk_level = "low"
-            risk_trend = "stable"
+        # 항상 위험도 점수 계산 (체크 질문 응답 여부와 관계없이)
+        risk_score, flags, evidence = calculate_risk_score(user_text_stripped, user_risk_history)
+        logger.info(f"[RISK_DEBUG] 위험도 계산 결과: score={risk_score}, flags={flags}, evidence={evidence}")
+        
+        # 누적 점수 계산 (히스토리 기반)
+        cumulative_score = user_risk_history.get_cumulative_score()
+        logger.info(f"[RISK_DEBUG] 누적 위험도 점수: {cumulative_score}")
+        
+        # 히스토리 상태 상세 로깅
+        logger.info(f"[RISK_DEBUG] 히스토리 상태: turns_count={len(user_risk_history.turns)}, last_updated={user_risk_history.last_updated}")
+        if user_risk_history.turns:
+            recent_turns = list(user_risk_history.turns)[-3:]  # 최근 3턴
+            for i, turn in enumerate(recent_turns):
+                logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
+        
+        risk_level = get_risk_level(cumulative_score)
+        logger.info(f"[RISK_DEBUG] 위험도 레벨: {risk_level}")
+        
+        # 데이터베이스에 누적 위험도 점수 저장
+        try:
+            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 시도: cumulative_score={cumulative_score}, turn_score={risk_score}")
+            await update_risk_score(session, user_id, cumulative_score)
+            logger.info(f"[RISK_SAVE] 누적 위험도 점수 저장 성공: cumulative_score={cumulative_score}")
+        except Exception as e:
+            logger.error(f"[RISK_SAVE] 누적 위험도 점수 저장 실패: cumulative_score={cumulative_score}, error={e}")
+            import traceback
+            logger.error(f"[RISK_SAVE] 상세 에러: {traceback.format_exc()}")
+        
+        # 위험도 추세 분석
+        risk_trend = user_risk_history.get_risk_trend()
+        logger.info(f"[RISK] score={risk_score} level={risk_level} trend={risk_trend} flags={flags}")
         
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
@@ -1037,9 +1029,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 except Exception as e:
                     logger.warning(f"[CHECK] 위험도 점수 초기화 실패: {e}")
                 
-                # 체크 질문 응답 점수는 유지하여 중복 응답을 방지한다
-                # user_risk_history.last_check_score = None  # 이 줄 제거
-                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 유지: {check_score} (중복 응답 방지)")
+                # 체크 질문 응답 완료 후 last_check_score를 유지하여 재질문 방지
+                # user_risk_history.last_check_score = None  # 이 줄 제거하여 재질문 방지
+                logger.info(f"[CHECK] 체크 질문 응답 완료 후 last_check_score 유지: {check_score} (재질문 방지)")
                 
                 # 체크 질문 응답 후 turn_count를 20으로 설정하여 20턴 동안 재질문 방지
                 user_risk_history.check_question_turn_count = 20
