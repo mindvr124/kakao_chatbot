@@ -400,11 +400,9 @@ import re
 
 # 이름 추출을 위한 정규식 패턴들 (강화)
 _NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|제|나|저|저를|날|나를)\s*', re.IGNORECASE)
-_NAME_SUFFIX_PATTERN = re.compile(r'\s*(라고|입니다|이에요|예요|에요|야|이야|합니다|불러|불러줘)\.?$', re.IGNORECASE)
+_NAME_SUFFIX_PATTERN = re.compile(r'\s*(라고\s*(부르세요|해주세요|불러주세요)|입니다|이에요|예요|에요|야|이야|합니다|불러|불러줘|잖아|거든|거든요|라니까)\.?$', re.IGNORECASE)
 _NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
-# 추가 패턴: "~라고 부르세요", "~라고 해주세요" 등
-_NAME_POLITE_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*(부르세요|해주세요|불러주세요)', re.IGNORECASE)
 
 # 웰컴 메시지 템플릿 (동적 이름 적용)
 def get_welcome_messages(prompt_name: str = "온유") -> list[str]:
@@ -434,11 +432,11 @@ PROFANITY = {
 
 COMMON_NON_NAME = {
     "학생","여자","남자","사람","개발자","디자이너","마케터","기획자","교사","선생","선생님", "사람", "동물", "짐승",
-    "중학생","고등학생","대학생","취준생","직장인","아이","어른","친구","고객","사용자", 
+    "중학생","고등학생","대학생","취준생","직장인","아이","어른","친구","고객","사용자", "이름",
     "엄마","아빠","부모","형","누나","오빠","언니","동생", "친구", "친구들", "너", "니",
     "학교","회사","집","병원","학원","카페","도서관","교회","역","지하철","버스",
     # 추가 보통명사들
-    "직원","사장","부장","과장","대리","주임","사무직","생산직","서비스직","자영업",
+    "직원","사장","부장","과장","대리","주임","사무직","생산직","서비스직","자영업자",
     "대학교","고등학교","중학교","초등학교","유치원","어린이집","학원","과외",
     "집","아파트","빌라","원룸","오피스텔","상가","건물","시설","장소","장소",
     "음식","음료","커피","차","술","담배","약","의약품","화장품","옷","신발"
@@ -500,19 +498,7 @@ def extract_korean_name(text: str) -> Optional[str]:
             logger.info(f"[명시패턴] 유효하지 않은 이름: '{cand}'")
             return None
 
-    # 2) "~라고 부르세요/해주세요" 정중한 패턴
-    name_polite_match = _NAME_POLITE_PATTERN.search(text)
-    if name_polite_match:
-        extracted_name = name_polite_match.group(1)
-        cand = clean_name(extracted_name)
-        if is_valid_name(cand):
-            logger.info(f"[정중패턴] '~라고 부르세요' → '{cand}'")
-            return cand
-        else:
-            logger.info(f"[정중패턴] 유효하지 않은 이름: '{cand}'")
-            return None
-
-    # 3) 기존 패턴으로 fallback: 접두/접미 제거 후 한글 2~4자 후보
+    # 2) 접두/접미 제거 후 한글 2~4자 후보 추출
     core = _NAME_PREFIX_PATTERN.sub('', text)
     core = _NAME_SUFFIX_PATTERN.sub('', core)
     match = _KOREAN_NAME_PATTERN.search(core)
