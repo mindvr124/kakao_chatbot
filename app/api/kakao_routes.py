@@ -399,7 +399,7 @@ import re
 # ======================================================================
 
 # 이름 추출을 위한 정규식 패턴들 (강화)
-_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|저를|날|나를|이름름)\s*', re.IGNORECASE)
+_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|제|나|저|저를|날|나를)\s*', re.IGNORECASE)
 _NAME_SUFFIX_PATTERN = re.compile(r'\s*(라고|입니다|이에요|예요|에요|야|이야|합니다|불러|불러줘)\.?$', re.IGNORECASE)
 _NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
@@ -435,7 +435,7 @@ PROFANITY = {
 COMMON_NON_NAME = {
     "학생","여자","남자","사람","개발자","디자이너","마케터","기획자","교사","선생","선생님", "사람", "동물", "짐승",
     "중학생","고등학생","대학생","취준생","직장인","아이","어른","친구","고객","사용자", 
-    "엄마","아빠","부모","형","누나","오빠","언니","동생", "친구", "친구들", "너", "니"
+    "엄마","아빠","부모","형","누나","오빠","언니","동생", "친구", "친구들", "너", "니",
     "학교","회사","집","병원","학원","카페","도서관","교회","역","지하철","버스"
 }
 
@@ -1295,12 +1295,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # ====== [이름 자동 추출 및 저장] ==============================================
         # 이름 패턴이 감지될 때만 검증하고 추출
         try:
-            # 이름 패턴이 감지되는지 먼저 확인
+            # 이름 패턴이 감지되는지 먼저 확인 (더 정확한 패턴 매칭)
             has_name_pattern = (
-                _NAME_PREFIX_PATTERN.search(user_text_stripped) or 
-                _NAME_SUFFIX_PATTERN.search(user_text_stripped) or
+                # 명시적인 이름 소개 패턴만 감지
                 _NAME_REQUEST_PATTERN.search(user_text_stripped) or
-                _NAME_POLITE_PATTERN.search(user_text_stripped)
+                _NAME_POLITE_PATTERN.search(user_text_stripped) or
+                # "내 이름은 민수야" 같은 명확한 패턴만 감지
+                (re.search(r'^(내\s*이름은|제\s*이름은)\s*[가-힣]{2,4}', user_text_stripped) and 
+                 _NAME_SUFFIX_PATTERN.search(user_text_stripped)) or
+                # "난 민수야" 같은 명확한 패턴만 감지
+                (re.search(r'^(난|나는|저는)\s*[가-힣]{2,4}', user_text_stripped) and 
+                 _NAME_SUFFIX_PATTERN.search(user_text_stripped))
             )
             
             if has_name_pattern:
