@@ -394,7 +394,12 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
 import asyncio
 import re
 
-# 이름 추출을 위한 정규식 패턴들 (강화)
+import re
+from typing import Optional
+
+# ======================================================================
+# 이름 추출을 위한 정규식 패턴들 (기초)
+# ======================================================================
 _NAME_PREFIX_PATTERN = re.compile(
     r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|제|나|저|저를|날|나를)\s*',
     re.IGNORECASE,
@@ -406,7 +411,9 @@ _NAME_SUFFIX_PATTERN = re.compile(
 _NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
 
-# 인삿말 패턴
+# ======================================================================
+# 인삿말 & 웰컴 메시지
+# ======================================================================
 _GREETINGS = {
     "안녕", "ㅎㅇ", "반가워", "하이", "헬로", "hi", "hello",
     "안녕하세요", "안녕하십니까", "반갑습니다", "처음뵙겠습니다",
@@ -414,7 +421,6 @@ _GREETINGS = {
     "너 누구야", "너는 누구야", "너는 누구니"
 }
 
-# 웰컴 메시지 템플릿 (동적 이름 적용)
 def get_welcome_messages(prompt_name: str = "온유") -> list[str]:
     return [
         f"안녕~ 난 {prompt_name}야🐥 너는 이름이 뭐야?",
@@ -422,7 +428,9 @@ def get_welcome_messages(prompt_name: str = "온유") -> list[str]:
         f"안녕~ 난 {prompt_name}야🐥 네 이름이 궁금해. 알려줘~!"
     ]
 
-# 이름 검증 강화: 금지어/보통명사/봇이름/허용 문자
+# ======================================================================
+# 이름 검증: 금칙어/보통명사/봇이름/허용 문자
+# ======================================================================
 PROFANITY = {
     "바보","멍청이","등신","미친놈","또라이","십새","병신","개새","쌍놈","개같","변태","찌질이",
     "fuck","shit","bitch","asshole","idiot","moron"
@@ -460,8 +468,6 @@ def clean_name(s: str) -> str:
     s = (s or "").strip()
     # 장식/괄호/따옴표 제거
     s = re.sub(r'[\"\'"()\[\]{}<>~]+', "", s)
-    # 조사가 맨 끝에 붙은 경우 제거
-    s = re.sub(r"[은는이가을를]$", "", s)
     return s.strip()
 
 def is_valid_name(s: str) -> bool:
@@ -475,138 +481,80 @@ def is_valid_name(s: str) -> bool:
         return False
     return bool(NAME_ALLOWED.fullmatch(s))
 
+# ======================================================================
+# 토큰/의미 단서 & 트리밍
+# ======================================================================
 KOREAN_WORD = re.compile(r'[가-힣]+')
+
+FIRST_PERSON = {"내","제","난","나는","전","저는","나","저"}
+SECOND_PERSON = {"너","니","네","너의","니가","네가","당신"}
+NAME_INTENT = {"이름","호칭","닉","닉네임","별명","애칭","성함","불러","부르"}
 STOPWORDS = {"아까는","방금","지금은","원래","그거","그건","그게","맞아","그러니까","근데","저기","잠깐"}
+
+# 조사(중간에 끼어 있으면 이름 아님)
+JOSA_CHARS = set("은는이가을를도만뿐조차까지부터")
 
 def tokenize_ko(text: str) -> list[str]:
     return KOREAN_WORD.findall(text or "")
 
-def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
-    t = (text or "").strip()
+def has_first_person(text: str) -> bool:
+    toks = tokenize_ko(text)
+    return any(t in FIRST_PERSON for t in toks)
 
-    # 2인칭만 강하면 거부
-    if has_second_person(t) and not has_first_person(t):
-        return None
+def has_second_person(text: str) -> bool:
+    toks = tokenize_ko(text)
+    return any(t in SECOND_PERSON for t in toks)
 
-    # A) 정정 패턴
-    for pat in CORRECTION_PATTERNS:
-        m = pat.search(t)
-        if m:
-            cand = strip_suffixes(clean_name(m.group(1)))
-            if is_valid_name(cand):
-                return cand
+def has_name_intent(text: str) -> bool:
+    toks = tokenize_ko(text)
+    return any(t in NAME_INTENT for t in toks)
 
-    # B) 명시 패턴 (★ 1인칭 뒤 최소 한 칸 공백 강제)
-    for pat in [
-        re.compile(r'([가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)', re.IGNORECASE),
-        re.compile(r'(?:^|[\s,])(내|제)\s+이름(?:은)?\s+([가-힣]{2,4})\b', re.IGNORECASE),
-        re.compile(r'(?:^|[\s,])(난|나는|전|저는)\s+([가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?', re.IGNORECASE),
-    ]:
-        m = pat.search(t)
-        if m:
-            # 패턴에 따라 그룹 인덱스 다름
-            grp = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
-            cand = strip_suffixes(clean_name(grp))
-            if is_valid_name(cand):
-                return cand
-
-    # C) ‘이름/불러…라고’ 조합
-    if has_name_intent(t):
-        m = re.search(r'\b([가-힣]{2,4})\s*라고\b', t)
-        if m:
-            cand = strip_suffixes(clean_name(m.group(1)))
-            if is_valid_name(cand):
-                return cand
-
-    if not allow_free:
-        return None  # 창구에선 여기서 끝
-
-    # D) 자유형: 토큰 기반, 1인칭 뒤 다음 토큰만 + STOPWORDS 제외
-    tokens = tokenize_ko(t)
-    n = len(tokens)
-
-    # 1) 1인칭 뒤 다음 토큰
-    for i, tok in enumerate(tokens):
-        if tok in FIRST_PERSON and i + 1 < n:
-            nxt = tokens[i + 1]
-            if nxt in STOPWORDS:
-                continue
-            cand = strip_suffixes(clean_name(nxt))
-            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
-                return cand
-
-    # 2) 이름 의도 뒤 다음 토큰
-    for i, tok in enumerate(tokens):
-        if tok in NAME_INTENT and i + 1 < n:
-            nxt = tokens[i + 1]
-            if nxt in STOPWORDS:
-                continue
-            cand = strip_suffixes(clean_name(nxt))
-            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
-                return cand
-
-    # 3) 1인칭 존재 시 나머지 토큰에서 2~4자 이름형만
-    if has_first_person(t):
-        for tok in tokens:
-            if tok in FIRST_PERSON or tok in NAME_INTENT or tok in STOPWORDS:
-                continue
-            cand = strip_suffixes(clean_name(tok))
-            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
-                return cand
-
-    return None
-
-# ----------------------------------------------------------------------
-# 이름 맥락/트리거 & 후보 선택기
-# ----------------------------------------------------------------------
-
-# LLM 안내문 트리거(정정 창구 오픈)
-RE_DISPUTE_TRIGGER = re.compile(r"내가\s*기억하는\s*네\s*이름은", re.IGNORECASE)
-
-# 1/2인칭, 이름 의도 키워드
-FIRST_PERSON = {"내","제","난","나는","전","저는","나","저"}
-SECOND_PERSON = {"너","니","네","너의","니가","네가"}
-NAME_INTENT = {"이름","불러","호칭","닉","닉네임","별명","애칭","성함"}
-
-def has_first_person(t: str) -> bool:
-    t = (t or "")
-    return any(k in t for k in FIRST_PERSON)
-
-def has_second_person(t: str) -> bool:
-    t = (t or "")
-    return any(k in t for k in SECOND_PERSON)
-
-def has_name_intent(t: str) -> bool:
-    t = (t or "")
-    return any(k in t for k in NAME_INTENT)
-
-# 후미 어미/강조 말투/조사 트리밍
-SUFFIX_TRIM = re.compile(r'(잖아|거든요?|라니까|라니|라고요|라며|라네|래요|맞아|거든)$')
+# 후미 어미/강조 말투/조사 트리밍(한 함수만 유지)
+SUFFIX_TRIM = re.compile(
+    r'(입니다|이에요|예요|에요|야|이야|요|임|잖아|거든요?|라니까|라니|라고요|라며|라네|래요|맞아)$'
+)
 def strip_suffixes(s: str) -> str:
     s = re.sub(SUFFIX_TRIM, '', s or "")
+    # 끝 조사 한 글자 제거
     s = re.sub(r'[은는이가을를]$', '', s)
     return s
 
-# “정정(교정)” 구어 패턴
+def has_internal_josa(s: str) -> bool:
+    if not s:
+        return False
+    # 맨 끝(어미/조사 자리)을 제외하고 중간에 조사 문자가 끼면 탈락
+    return any(ch in JOSA_CHARS for ch in s[:-1])
+
+# ======================================================================
+# 이름 후보 선택기 & 정정 트리거
+# ======================================================================
+# LLM 안내문 트리거(정정 창구 오픈 감지)
+RE_DISPUTE_TRIGGER = re.compile(r"내가\s*기억하는\s*네\s*이름은", re.IGNORECASE)
+
+# 교정(정정) 패턴: "그거 아니고 희재", "내 이름 희재", "희재라고 불러"
 CORRECTION_PATTERNS = [
-    re.compile(r'(?:그거|그건|그게)\s*아니고\s*([가-힣]{2,4})\s*(?:임|임요|임다|임ㅋ|임^^)?', re.IGNORECASE),
-    re.compile(r'아님\s*([가-힣]{2,4})', re.IGNORECASE),
-    re.compile(r'아냐\s*([가-힣]{2,4})', re.IGNORECASE),
-    re.compile(r'아닌데\s*([가-힣]{2,4})', re.IGNORECASE),
-    re.compile(r'(?:틀렸|아니)\s*(?:고|자)\s*([가-힣]{2,4})', re.IGNORECASE),
-    re.compile(r'정정\s*[:：]?\s*([가-힣]{2,4})', re.IGNORECASE),
+    re.compile(r'(?:그거\s*아니고|아니,\s*|아니야|틀렸고|정정)\s*([가-힣]{2,4})'),
+    re.compile(r'(?:내\s*이름(?:은)?|이름은)\s*([가-힣]{2,4})'),
+    re.compile(r'([가-힣]{2,4})\s*라고\s*(?:해|불러)(?:줘|주세요)?')
 ]
 
-def pick_candidate_name(text: str) -> Optional[str]:
+# 명시 패턴(그룹명 사용): 1) "~라고 불러", 2) "내 이름 은 ~", 3) "나는 ~야"
+EXPLICIT_PATTERNS = [
+    re.compile(r'(?P<name>[가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)'),
+    re.compile(r'(?:^|[\s,])(내|제)\s+이름(?:은)?\s+(?P<name>[가-힣]{2,4})\b'),
+    re.compile(r'(?:^|[\s,])(난|나는|전|저는)\s+(?P<name>[가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?'),
+]
+
+def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
     """
     오탐 방지형 이름 후보 선택기:
       - 2인칭만 강한 문맥 거부
-      - 정정/명시/완화/자기소개형 순서로 탐색
-      - 후미 어미/조사 제거 + 유효성 필터
+      - 정정/명시/완화/자유형(옵션) 순서로 탐색
+      - 후미 어미/조사 제거 + 내부 조사/금칙어/형식 검증
     """
     t = (text or "").strip()
 
-    # 2인칭만 강한 문맥(“니/너 …”)은 거부
+    # 2인칭만 강한 문맥(“너/니 …”)은 거부 — '그건 니 이름이잖아' 같은 반박 방지
     if has_second_person(t) and not has_first_person(t):
         return None
 
@@ -615,35 +563,60 @@ def pick_candidate_name(text: str) -> Optional[str]:
         m = pat.search(t)
         if m:
             cand = strip_suffixes(clean_name(m.group(1)))
-            if is_valid_name(cand):
+            if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
-    # B) 명시 패턴 (존댓말 포함)
-    for pat in [
-        re.compile(r'([가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)', re.IGNORECASE),
-        re.compile(r'(?:내|제)\s*이름(?:은)?\s*([가-힣]{2,4})', re.IGNORECASE),
-        re.compile(r'(?:난|나는|전|저는)\s*([가-힣]{2,4})\s*(?:이야|야|라고\s*해(?:요)?)', re.IGNORECASE),
-    ]:
+    # B) 명시 패턴 (공백 강제, 존댓말 포함)
+    for pat in EXPLICIT_PATTERNS:
         m = pat.search(t)
         if m:
-            cand = strip_suffixes(clean_name(m.group(1)))
-            if is_valid_name(cand):
+            grp = m.groupdict().get("name") or m.group(1)
+            cand = strip_suffixes(clean_name(grp))
+            if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
-    # C) 문장에 '이름' 있을 때만 느슨한 “…라고” 허용
+    # C) ‘이름/불러…’ 의도 + “…라고”
     if has_name_intent(t):
-        m = re.search(r'([가-힣]{2,4})\s*라고\b', t)
+        m = re.search(r'\b([가-힣]{2,4})\s*라고\b', t)
         if m:
             cand = strip_suffixes(clean_name(m.group(1)))
-            if is_valid_name(cand):
+            if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
-    # D) 아주 짧은 자기소개형: 1인칭 필수
-    if has_first_person(t):
-        core = strip_suffixes(clean_name(re.sub(r'\s+', '', t)))
-        for tok in re.findall(r'[가-힣]{2,4}', core):
+    # D) 자유형 (정정 창구에서는 금지)
+    if not allow_free:
+        return None
+
+    tokens = tokenize_ko(t)
+    n = len(tokens)
+
+    # 1) 1인칭 뒤 다음 토큰만(공백으로 분리된 진짜 다음 단어), STOPWORDS/내부조사 금지
+    for i, tok in enumerate(tokens):
+        if tok in FIRST_PERSON and i + 1 < n:
+            nxt = tokens[i + 1]
+            if nxt in STOPWORDS:
+                continue
+            cand = strip_suffixes(clean_name(nxt))
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand) and not has_internal_josa(cand):
+                return cand
+
+    # 2) ‘이름/불러…’ 의도 뒤 다음 토큰
+    for i, tok in enumerate(tokens):
+        if tok in NAME_INTENT and i + 1 < n:
+            nxt = tokens[i + 1]
+            if nxt in STOPWORDS:
+                continue
+            cand = strip_suffixes(clean_name(nxt))
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand) and not has_internal_josa(cand):
+                return cand
+
+    # 3) 1인칭이 있으면 나머지 토큰에서 2~4자 이름형 스캔(최후 보루)
+    if any(tp in tokens for tp in FIRST_PERSON):
+        for tok in tokens:
+            if tok in FIRST_PERSON or tok in NAME_INTENT or tok in STOPWORDS:
+                continue
             cand = strip_suffixes(clean_name(tok))
-            if is_valid_name(cand):
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
     return None
@@ -860,6 +833,7 @@ async def handle_name_flow(
                 raw = clean_name(user_text)
                 if contains_profanity(raw) or is_common_non_name(raw) or is_bot_name(raw):
                     response_text = "그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo"
+                    # 메시지 테이블에 저장 (중복 방지)
                     try:
                         await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
                     except Exception:
@@ -1007,7 +981,7 @@ async def handle_name_flow(
                         media_type="application/json; charset=utf-8"
                     )
                 else:
-                    # 일반 대화 저장 & 반환
+                    # 일반 대화 저장 & 반환 (중복 제거)
                     try:
                         if not str(conv.conv_id).startswith("temp_") and conv.conv_id:
                             await save_message(session, conv.conv_id, "user", user_text, x_request_id, None, user_id)
