@@ -541,8 +541,10 @@ CORRECTION_PATTERNS = [
 # 명시 패턴(그룹명 사용): 1) "~라고 불러", 2) "내 이름 은 ~", 3) "나는 ~야"
 EXPLICIT_PATTERNS = [
     re.compile(r'(?P<name>[가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)'),
-    re.compile(r'(?:^|[\s,])(내|제)\s+이름(?:은)?\s+(?P<name>[가-힣]{2,4})\b'),
-    re.compile(r'(?:^|[\s,])(난|나는|전|저는|나)\s+(?P<name>[가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?'),
+    # 공백 유무 모두 허용: "내 이름", "내이름"
+    re.compile(r'(?:^|[\s,])(내|제)\s*이름(?:은)?\s*(?P<name>[가-힣]{2,4})\s*(?:이야|야|입니다|예요|에요)?'),
+    # '나' 단독도 허용
+    re.compile(r'(?:^|[\s,])(난|나는|전|저는|나)\s+(?P<name>[가-힣]{2,4})\s*(?:이야|야|라고\s*해(?:요)?)?'),
 ]
 
 def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
@@ -550,7 +552,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
     오탐 방지형 이름 후보 선택기:
       - 2인칭만 강한 문맥 거부
       - 정정/명시/완화/자유형(옵션) 순서로 탐색
-      - 후미 어미/조사 제거 + 내부 조사/금칙어/형식 검증
+      - 정정 창구(allow_free=False)에서도 '단독 이름' 허용
     """
     t = (text or "").strip()
 
@@ -566,7 +568,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
             if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
-    # B) 명시 패턴 (공백 강제, 존댓말 포함)
+    # B) 명시 패턴 (공백 유무/존댓말 포함)
     for pat in EXPLICIT_PATTERNS:
         m = pat.search(t)
         if m:
@@ -583,7 +585,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
             if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
-    # ★ dispute window: bare name OK (allow_free=False 일 때도 단독 이름은 허용)
+    # ★ dispute window: '단독 이름' 허용 (allow_free=False 여도 허용)
     m = re.fullmatch(r'\s*([가-힣]{2,4})\s*', t)
     if m:
         cand = strip_suffixes(clean_name(m.group(1)))
@@ -597,7 +599,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
     tokens = tokenize_ko(t)
     n = len(tokens)
 
-    # 1) 1인칭 뒤 다음 토큰만(공백으로 분리된 진짜 다음 단어), STOPWORDS/내부조사 금지
+    # 1) 1인칭 뒤 다음 토큰만, STOPWORDS/내부조사 금지
     for i, tok in enumerate(tokens):
         if tok in FIRST_PERSON and i + 1 < n:
             nxt = tokens[i + 1]
@@ -627,7 +629,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
                 return cand
 
     return None
-    
+       
 # ----------------------------------------------------------------------
 # 기본 추출/테스트 (이전 로직 호환)
 # ----------------------------------------------------------------------
