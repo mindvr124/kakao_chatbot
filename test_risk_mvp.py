@@ -79,20 +79,51 @@ def test_database_integration():
     try:
         # 데이터베이스 세션과 사용자 ID가 있는 경우 테스트
         user_id = "test_user_123"
-        db_session = None  # 실제 데이터베이스 세션은 여기서 생성
+        
+        # 실제 데이터베이스 세션 생성 시도
+        try:
+            from app.database.db import get_session
+            db_session = None
+            # 동기적으로 세션 생성 시도
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있으면 새로 생성
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                async def get_session_sync():
+                    async for session in get_session():
+                        return session
+                    return None
+                
+                db_session = loop.run_until_complete(get_session_sync())
+            except Exception as loop_error:
+                print(f"이벤트 루프 생성 실패: {loop_error}")
+                db_session = None
+        except Exception as db_error:
+            print(f"데이터베이스 연결 실패: {db_error}")
+            db_session = None
         
         print(f"데이터베이스 연동 테스트:")
         print(f"  - user_id: {user_id}")
         print(f"  - db_session: {db_session}")
-        print(f"  - 데이터베이스 세션이 없어서 메모리에서만 동작")
+        if db_session:
+            print(f"  - 데이터베이스 세션 연결 성공")
+        else:
+            print(f"  - 데이터베이스 세션이 없어서 메모리에서만 동작")
         print()
         
-        # RiskHistory 인스턴스 생성 (데이터베이스 연동 없이)
-        risk_history = RiskHistory(user_id=user_id)
+        # RiskHistory 인스턴스 생성
+        if db_session:
+            risk_history = RiskHistory(user_id=user_id, db_session=db_session)
+            print(f"RiskHistory 생성 완료 (데이터베이스 연동):")
+        else:
+            risk_history = RiskHistory(user_id=user_id)
+            print(f"RiskHistory 생성 완료 (메모리만):")
         
-        print(f"RiskHistory 생성 완료:")
         print(f"  - user_id: {risk_history.user_id}")
-        print(f"  - db_session: {risk_history.db_session}")
         print(f"  - check_question_turn_count: {risk_history.check_question_turn_count}")
         print()
         
