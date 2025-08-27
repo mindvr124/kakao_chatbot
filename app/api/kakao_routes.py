@@ -475,6 +475,87 @@ def is_valid_name(s: str) -> bool:
         return False
     return bool(NAME_ALLOWED.fullmatch(s))
 
+KOREAN_WORD = re.compile(r'[가-힣]+')
+STOPWORDS = {"아까는","방금","지금은","원래","그거","그건","그게","맞아","그러니까","근데","저기","잠깐"}
+
+def tokenize_ko(text: str) -> list[str]:
+    return KOREAN_WORD.findall(text or "")
+
+def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
+    t = (text or "").strip()
+
+    # 2인칭만 강하면 거부
+    if has_second_person(t) and not has_first_person(t):
+        return None
+
+    # A) 정정 패턴
+    for pat in CORRECTION_PATTERNS:
+        m = pat.search(t)
+        if m:
+            cand = strip_suffixes(clean_name(m.group(1)))
+            if is_valid_name(cand):
+                return cand
+
+    # B) 명시 패턴 (★ 1인칭 뒤 최소 한 칸 공백 강제)
+    for pat in [
+        re.compile(r'([가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)', re.IGNORECASE),
+        re.compile(r'(?:^|[\s,])(내|제)\s+이름(?:은)?\s+([가-힣]{2,4})\b', re.IGNORECASE),
+        re.compile(r'(?:^|[\s,])(난|나는|전|저는)\s+([가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?', re.IGNORECASE),
+    ]:
+        m = pat.search(t)
+        if m:
+            # 패턴에 따라 그룹 인덱스 다름
+            grp = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(1)
+            cand = strip_suffixes(clean_name(grp))
+            if is_valid_name(cand):
+                return cand
+
+    # C) ‘이름/불러…라고’ 조합
+    if has_name_intent(t):
+        m = re.search(r'\b([가-힣]{2,4})\s*라고\b', t)
+        if m:
+            cand = strip_suffixes(clean_name(m.group(1)))
+            if is_valid_name(cand):
+                return cand
+
+    if not allow_free:
+        return None  # 창구에선 여기서 끝
+
+    # D) 자유형: 토큰 기반, 1인칭 뒤 다음 토큰만 + STOPWORDS 제외
+    tokens = tokenize_ko(t)
+    n = len(tokens)
+
+    # 1) 1인칭 뒤 다음 토큰
+    for i, tok in enumerate(tokens):
+        if tok in FIRST_PERSON and i + 1 < n:
+            nxt = tokens[i + 1]
+            if nxt in STOPWORDS:
+                continue
+            cand = strip_suffixes(clean_name(nxt))
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
+                return cand
+
+    # 2) 이름 의도 뒤 다음 토큰
+    for i, tok in enumerate(tokens):
+        if tok in NAME_INTENT and i + 1 < n:
+            nxt = tokens[i + 1]
+            if nxt in STOPWORDS:
+                continue
+            cand = strip_suffixes(clean_name(nxt))
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
+                return cand
+
+    # 3) 1인칭 존재 시 나머지 토큰에서 2~4자 이름형만
+    if has_first_person(t):
+        for tok in tokens:
+            if tok in FIRST_PERSON or tok in NAME_INTENT or tok in STOPWORDS:
+                continue
+            cand = strip_suffixes(clean_name(tok))
+            if re.fullmatch(r'[가-힣]{2,4}', cand or "") and is_valid_name(cand):
+                return cand
+
+    return None
+
 # ----------------------------------------------------------------------
 # 이름 맥락/트리거 & 후보 선택기
 # ----------------------------------------------------------------------
@@ -753,7 +834,8 @@ async def handle_name_flow(
         # ---- A) 정정 창구 우선 처리 (3턴) -----------------------------------
         if NameDisputeWindow.is_open(user_id):
             logger.info(f"[NAME-DISPUTE] input during window: '{user_text}'")
-            cand = pick_candidate_name(user_text)
+            # 창구에서는 A/B/C 패턴만 사용
+            cand = pick_candidate_name(user_text, allow_free=False)
             if cand and is_valid_name(cand) and not (contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand)):
                 try:
                     await save_user_name(session, user_id, cand)
