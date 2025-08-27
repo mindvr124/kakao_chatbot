@@ -38,6 +38,8 @@ class AIService:
     @traceable
     async def get_active_prompt(self, session: AsyncSession, prompt_name: str = "default") -> Optional[PromptTemplate]:
         """활성화된 프롬프트 템플릿을 가져옵니다."""
+        logger.info(f"[PROMPT_DEBUG] get_active_prompt 호출: prompt_name={prompt_name}")
+        
         stmt = (
             select(PromptTemplate)
             .where(PromptTemplate.name == prompt_name)
@@ -45,19 +47,36 @@ class AIService:
             .order_by(PromptTemplate.version.desc())
             .limit(1)
         )
+        
+        logger.info(f"[PROMPT_DEBUG] SQL 쿼리 실행: {stmt}")
+        
         try:
             result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            prompt = result.scalar_one_or_none()
+            
+            if prompt:
+                logger.info(f"[PROMPT_DEBUG] 프롬프트 찾음: name={prompt.name}, version={prompt.version}, is_active={prompt.is_active}")
+            else:
+                logger.warning(f"[PROMPT_DEBUG] 프롬프트를 찾을 수 없음: prompt_name={prompt_name}")
+            
+            return prompt
+            
         except Exception as e:
+            logger.error(f"[PROMPT_DEBUG] get_active_prompt 실행 실패: {e}")
             try:
                 await session.rollback()
-            except Exception:
-                pass
-            try:
                 result = await session.execute(stmt)
-                return result.scalar_one_or_none()
-            except Exception:
-                logger.warning(f"get_active_prompt failed after rollback: {e}")
+                prompt = result.scalar_one_or_none()
+                
+                if prompt:
+                    logger.info(f"[PROMPT_DEBUG] 롤백 후 프롬프트 찾음: name={prompt.name}, version={prompt.version}")
+                else:
+                    logger.warning(f"[PROMPT_DEBUG] 롤백 후에도 프롬프트를 찾을 수 없음")
+                
+                return prompt
+                
+            except Exception as rollback_error:
+                logger.error(f"[PROMPT_DEBUG] 롤백 후에도 실패: {rollback_error}")
                 return None
 
     @traceable
@@ -157,8 +176,17 @@ class AIService:
                 logger.warning(f"Failed to get user name: {e}")
 
         # 기본 시스템 프롬프트 추가
+        logger.info(f"[PROMPT_DEBUG] 프롬프트 로딩 시작: prompt_name={prompt_name}")
         prompt_template = await self.get_active_prompt(session, prompt_name)
-        system_prompt = prompt_template.system_prompt if prompt_template else self.default_system_prompt
+        
+        if prompt_template:
+            logger.info(f"[PROMPT_DEBUG] 프롬프트 템플릿 로딩 성공: name={prompt_template.name}, version={prompt_template.version}, is_active={prompt_template.is_active}")
+            system_prompt = prompt_template.system_prompt
+        else:
+            logger.warning(f"[PROMPT_DEBUG] 프롬프트 템플릿 로딩 실패: prompt_name={prompt_name}, 기본 프롬프트 사용")
+            system_prompt = self.default_system_prompt
+        
+        logger.info(f"[PROMPT_DEBUG] 최종 시스템 프롬프트 길이: {len(system_prompt)} 문자")
         messages.append({"role": "system", "content": system_prompt})
 
         # 맥락 내용 지시를 명시적으로 추가
