@@ -542,7 +542,7 @@ CORRECTION_PATTERNS = [
 EXPLICIT_PATTERNS = [
     re.compile(r'(?P<name>[가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)'),
     re.compile(r'(?:^|[\s,])(내|제)\s+이름(?:은)?\s+(?P<name>[가-힣]{2,4})\b'),
-    re.compile(r'(?:^|[\s,])(난|나는|전|저는)\s+(?P<name>[가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?'),
+    re.compile(r'(?:^|[\s,])(난|나는|전|저는|나)\s+(?P<name>[가-힣]{2,4})\s*(이야|야|라고\s*해(?:요)?)?'),
 ]
 
 def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
@@ -583,6 +583,13 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
             if is_valid_name(cand) and not has_internal_josa(cand):
                 return cand
 
+    # ★ dispute window: bare name OK (allow_free=False 일 때도 단독 이름은 허용)
+    m = re.fullmatch(r'\s*([가-힣]{2,4})\s*', t)
+    if m:
+        cand = strip_suffixes(clean_name(m.group(1)))
+        if is_valid_name(cand) and not has_internal_josa(cand):
+            return cand
+
     # D) 자유형 (정정 창구에서는 금지)
     if not allow_free:
         return None
@@ -620,7 +627,7 @@ def pick_candidate_name(text: str, allow_free: bool = True) -> Optional[str]:
                 return cand
 
     return None
-
+    
 # ----------------------------------------------------------------------
 # 기본 추출/테스트 (이전 로직 호환)
 # ----------------------------------------------------------------------
