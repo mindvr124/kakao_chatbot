@@ -29,7 +29,6 @@ from app.database.service import (
     update_check_response,
     update_risk_score,
     upsert_user,
-    decrement_check_question_turn_once,
     get_active_prompt_name,
     get_risk_state,
 )
@@ -399,11 +398,13 @@ import re
 # 정규식 패턴 & 상수
 # ======================================================================
 
-# 이름 추출을 위한 정규식 패턴들
-_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|나를를)\s*', re.IGNORECASE)
-_NAME_SUFFIX_PATTERN = re.compile(r'\s*(입니다|이에요|예요|에요|야|이야|라고\s*해|라고\s*해요|이라고\s*해|이라고\s*해요|합니다|불러|불러줘|라고\s*불러|라고\s*불러줘|이라고\s*불러|이라고\s*불러줘)\.?$', re.IGNORECASE)
+# 이름 추출을 위한 정규식 패턴들 (강화)
+_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|저를|날|나를)\s*', re.IGNORECASE)
+_NAME_SUFFIX_PATTERN = re.compile(r'\s*(라고|입니다|이에요|예요|에요|야|이야|합니다|불러|불러줘)\.?$', re.IGNORECASE)
 _NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
-_KOREAN_NAME_PATTERN   = re.compile(r'[가-힣]{2,4}')
+_KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
+# 추가 패턴: "~라고 부르세요", "~라고 해주세요" 등
+_NAME_POLITE_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*(부르세요|해주세요|불러주세요)', re.IGNORECASE)
 
 # 웰컴 메시지 템플릿 (동적 이름 적용)
 def get_welcome_messages(prompt_name: str = "온유") -> list[str]:
@@ -488,13 +489,25 @@ def extract_korean_name(text: str) -> Optional[str]:
         extracted_name = name_request_match.group(1)
         cand = clean_name(extracted_name)
         if is_valid_name(cand):
-            logger.info(f"\n[명시패턴] '~라고 불러' → '{cand}'")
+            logger.info(f"[명시패턴] '~라고 불러' → '{cand}'")
             return cand
         else:
-            logger.info(f"\n[명시패턴] 유효하지 않은 이름: '{cand}'")
+            logger.info(f"[명시패턴] 유효하지 않은 이름: '{cand}'")
             return None
 
-    # 2) 기존 패턴으로 fallback: 접두/접미 제거 후 한글 2~4자 후보
+    # 2) "~라고 부르세요/해주세요" 정중한 패턴
+    name_polite_match = _NAME_POLITE_PATTERN.search(text)
+    if name_polite_match:
+        extracted_name = name_polite_match.group(1)
+        cand = clean_name(extracted_name)
+        if is_valid_name(cand):
+            logger.info(f"[정중패턴] '~라고 부르세요' → '{cand}'")
+            return cand
+        else:
+            logger.info(f"[정중패턴] 유효하지 않은 이름: '{cand}'")
+            return None
+
+    # 3) 기존 패턴으로 fallback: 접두/접미 제거 후 한글 2~4자 후보
     core = _NAME_PREFIX_PATTERN.sub('', text)
     core = _NAME_SUFFIX_PATTERN.sub('', core)
     match = _KOREAN_NAME_PATTERN.search(core)
@@ -502,7 +515,7 @@ def extract_korean_name(text: str) -> Optional[str]:
         cand = clean_name(match.group())
         if is_valid_name(cand):
             return cand
-        logger.info(f"\n[추출] 유효하지 않은 이름: '{cand}'")
+        logger.info(f"[추출] 유효하지 않은 이름: '{cand}'")
     return None
 
 def test_name_extraction(text: str) -> dict:
@@ -683,14 +696,14 @@ async def handle_name_flow(
             logger.warning(f"[경고] 대화 세션 생성 실패: {e}")
             conv = None
 
-        # ====== 2-1) '/이름' 명령: 다음 발화를 이름으로 받기 ======
+        # ====== 2-1) '/이름' 명령: 이름 변경 요청 (자동 추출 실패 시 fallback) ======
         if user_text == "/이름":
             PendingNameCache.set_waiting(user_id)
             try:
                 await save_log_message(session, "name_wait_start", "Name wait started", str(user_id), None, {"x_request_id": x_request_id})
             except Exception:
                 pass
-            return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~")
+            return kakao_text("불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n💡 팁: 자연스럽게 '내 이름은 민수야'라고 말해도 알아들어요!")
 
         # ====== 2-1.5) 이미 대기 상태였다면 입력을 이름으로 처리 ======
         if PendingNameCache.is_waiting(user_id):
@@ -879,7 +892,12 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
     """카카오 스킬 메인 엔드포인트"""
     # X-Request-ID 추출 (로깅용)
     x_request_id = request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id")
+    
+    logger.bind(x_request_id=x_request_id).info("================================================================================")
+    logger.bind(x_request_id=x_request_id).info("========================== SKILL ENDPOINT STARTED ==============================")
+    logger.bind(x_request_id=x_request_id).info("================================================================================")
     logger.bind(x_request_id=x_request_id).info("Skill endpoint started")
+    logger.bind(x_request_id=x_request_id).info("================================================================================")
     
     try:
 
@@ -1230,8 +1248,39 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # check_question_turn_count로 20턴 동안 재질문을 방지
         logger.info(f"[RISK] 일반 대화 완료 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
 
-        # ====== [이름 플로우 처리] ==============================================
-        # 이름 관련 플로우 처리 (conv_id 전달)
+        # ====== [이름 자동 추출 및 저장] ==============================================
+        # 사용자 발화에서 이름이 감지되면 자동으로 추출하고 저장
+        try:
+            extracted_name = extract_korean_name(user_text_stripped)
+            if extracted_name:
+                logger.info(f"[이름추출] 자동 감지: '{extracted_name}'")
+                
+                # 현재 사용자 정보 확인
+                user = await session.get(AppUser, user_id)
+                current_name = user.user_name if user else None
+                
+                # 이름이 다르거나 새로 설정되는 경우에만 저장
+                if not current_name or current_name != extracted_name:
+                    try:
+                        await save_user_name(session, user_id, extracted_name)
+                        logger.info(f"[이름저장] 자동 저장 완료: {user_id} -> {extracted_name}")
+                        
+                        # 이름 변경 알림 메시지
+                        if current_name:
+                            name_response = kakao_text(f"알겠어! 앞으로 {extracted_name}(이)라고 부를게~ 🎉")
+                        else:
+                            name_response = kakao_text(f"반가워 {extracted_name}아(야)! 앞으로 {extracted_name}(이)라고 부를게🐥")
+                        
+                        return name_response
+                    except Exception as e:
+                        logger.error(f"[이름저장] 자동 저장 실패: {e}")
+                else:
+                    logger.info(f"[이름추출] 이미 동일한 이름 사용 중: {extracted_name}")
+        except Exception as e:
+            logger.warning(f"[이름추출] 자동 추출 중 오류: {e}")
+
+        # ====== [기존 이름 플로우 처리] ==============================================
+        # 이름 관련 플로우 처리 (conv_id 전달) - 자동 추출 실패 시 fallback
         name_response = await handle_name_flow(session, user_id, user_text_stripped, x_request_id, conv_id)
         if name_response:
             return name_response
