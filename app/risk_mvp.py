@@ -76,14 +76,13 @@ P_POSITIVE = re.compile(
 
 class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
-    def __init__(self, max_turns: int = 20, user_id: str = None, db_session = None):
+    def __init__(self, max_turns: int = 20, user_id: str = None):
         self.turns = deque(maxlen=max_turns)
         self.max_turns = max_turns
         self.last_updated = datetime.now()
         self.check_question_turn_count = 0
         self.last_check_score = None
         self.user_id = user_id
-        self.db_session = db_session
         logger.info(f"[RISK_HISTORY] RiskHistory 객체 생성: user_id={user_id}, check_question_turn_count={self.check_question_turn_count}")
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
@@ -139,17 +138,7 @@ class RiskHistory:
         old_count = self.check_question_turn_count
         self.check_question_turn_count = 20  # 20턴 카운트다운 시작
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 기록: {old_count} -> {self.check_question_turn_count} (호출 스택: {self._get_caller_info()})")
-        if self.user_id and self.db_session:
-            try:
-                import asyncio
-                from app.database.service import mark_check_question_sent
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                loop.run_until_complete(mark_check_question_sent(self.db_session, self.user_id))
-            except Exception as e:
-                logger.error(f"[RISK_HISTORY] DB 체크 질문 발송 기록 실패: {e}")
+        # DB 동기화는 kakao_routes.py에서 처리
     def _get_caller_info(self) -> str:
         """호출자 정보를 반환합니다."""
         import inspect
@@ -166,22 +155,8 @@ class RiskHistory:
         return "unknown"
     def sync_with_database(self):
         """데이터베이스와 메모리 상태를 동기화합니다."""
-        if self.user_id and self.db_session:
-            try:
-                import asyncio
-                from app.database.service import get_check_question_turn
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                db_turn = loop.run_until_complete(get_check_question_turn(self.db_session, self.user_id))
-                logger.info(f"[RISK_HISTORY] DB 동기화 시도: 현재={self.check_question_turn_count}, DB={db_turn}")
-                if db_turn != self.check_question_turn_count:
-                    old_count = self.check_question_turn_count
-                    self.check_question_turn_count = db_turn
-                    logger.info(f"[RISK_HISTORY] DB 동기화 완료: {old_count} -> {self.check_question_turn_count}")
-            except Exception as e:
-                logger.error(f"[RISK_HISTORY] DB 동기화 실패: {e}")
+        # DB 동기화는 kakao_routes.py에서 처리
+        logger.info(f"[RISK_HISTORY] DB 동기화는 외부에서 처리됨")
     def can_send_check_question(self) -> bool:
         """체크 질문을 발송할 수 있는지 확인합니다."""
         can_send = self.check_question_turn_count == 0

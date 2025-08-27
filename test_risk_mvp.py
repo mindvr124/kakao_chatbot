@@ -88,7 +88,7 @@ def test_database_integration():
         print()
         
         # RiskHistory 인스턴스 생성 (데이터베이스 연동 없이)
-        risk_history = RiskHistory(user_id=user_id, db_session=db_session)
+        risk_history = RiskHistory(user_id=user_id)
         
         print(f"RiskHistory 생성 완료:")
         print(f"  - user_id: {risk_history.user_id}")
