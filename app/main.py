@@ -25,7 +25,7 @@ else:
 
 # loguru 설정
 logger.remove()  # 기본 핸들러 제거
-logger.add(sys.stdout, level="INFO", format="{time:%H:%M:%S} | {level} | {message}")
+logger.add(sys.stdout, level="INFO", format="| {level} | {message}")
 
 # 요청 시간 계산 (카카오 블록은 5초 제한, 이전 마진) 및 전역 HTTPX 클라이언트 선언
 BUDGET: float = 4.0

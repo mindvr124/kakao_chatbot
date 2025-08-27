@@ -1301,15 +1301,16 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 _NAME_REQUEST_PATTERN.search(user_text_stripped) or
                 _NAME_POLITE_PATTERN.search(user_text_stripped) or
                 # "내 이름은 민수야" 같은 명확한 패턴만 감지
-                (re.search(r'^(내\s*이름은|제\s*이름은)\s*[가-힣]{2,4}', user_text_stripped) and 
-                 _NAME_SUFFIX_PATTERN.search(user_text_stripped)) or
+                re.search(r'^(내\s*이름은|제\s*이름은)\s*[가-힣]{2,4}', user_text_stripped) or
                 # "난 민수야" 같은 명확한 패턴만 감지
-                (re.search(r'^(난|나는|저는)\s*[가-힣]{2,4}', user_text_stripped) and 
-                 _NAME_SUFFIX_PATTERN.search(user_text_stripped))
+                re.search(r'^(난|나는|저는)\s*[가-힣]{2,4}', user_text_stripped) or
+                # "내 이름은 민수입니다" 같은 패턴도 감지
+                re.search(r'^(내\s*이름은|제\s*이름은)\s*[가-힣]{2,4}\s*(입니다|이에요|예요|야|이야)', user_text_stripped)
             )
             
             if has_name_pattern:
                 logger.info(f"[이름패턴] 이름 패턴 감지: '{user_text_stripped}'")
+                logger.info(f"[이름패턴] 패턴 매칭 성공 - 이름 추출 시도")
                 
                 # 이름 추출 시도
                 extracted_name = extract_korean_name(user_text_stripped)
@@ -1378,7 +1379,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 else:
                     logger.info(f"[이름추출] 패턴은 감지되었으나 유효한 이름 추출 실패")
             else:
-                logger.debug(f"[이름패턴] 이름 패턴 미감지: '{user_text_stripped}'")
+                logger.info(f"[이름패턴] 이름 패턴 미감지: '{user_text_stripped}'")
+                logger.info(f"[이름패턴] AI 응답으로 진행")
         except Exception as e:
             logger.warning(f"[이름추출] 자동 추출 중 오류: {e}")
 
