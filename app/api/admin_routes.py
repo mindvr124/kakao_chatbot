@@ -11,7 +11,8 @@ from app.schemas.schemas import (
     AIProcessingTaskResponse, AIProcessingTaskListResponse, RetryAIProcessingTaskResponse
 )
 from app.database.service import (
-    create_prompt_template, get_prompt_templates, get_prompt_template_by_name, activate_prompt_template
+    create_prompt_template, get_prompt_templates, get_prompt_template_by_name, 
+    activate_prompt_template, activate_prompt_template_by_name
 )
 from app.core.ai_worker import ai_worker
 from app.core.ai_processing_service import ai_processing_service
@@ -103,7 +104,8 @@ async def activate_prompt(
     session: AsyncSession = Depends(get_session)
 ):
     """프롬프트 템플릿을 활성화합니다."""
-    prompt = await activate_prompt_template(session, name)
+    # 이름으로 프롬프트를 찾아서 활성화
+    prompt = await activate_prompt_template_by_name(session, name)
     if not prompt:
         raise HTTPException(404, "Prompt template not found")
     return prompt

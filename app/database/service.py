@@ -392,6 +392,43 @@ async def activate_prompt_template(session: AsyncSession, prompt_id: str) -> boo
         raise
     return True
 
+async def activate_prompt_template_by_name(session: AsyncSession, name: str) -> Optional[PromptTemplate]:
+    """이름으로 프롬프트 템플릿을 찾아서 활성화합니다."""
+    # 해당 이름의 가장 최신 버전 프롬프트를 찾음
+    stmt = select(PromptTemplate).where(PromptTemplate.name == name).order_by(PromptTemplate.version.desc())
+    try:
+        result = await session.execute(stmt)
+        prompt = result.scalar_one_or_none()
+    except Exception:
+        await session.rollback()
+        result = await session.execute(stmt)
+        prompt = result.scalar_one_or_none()
+    
+    if not prompt:
+        return None
+    
+    # 같은 이름의 다른 프롬프트는 비활성화
+    stmt = select(PromptTemplate).where(PromptTemplate.name == name, PromptTemplate.is_active == True)
+    try:
+        result = await session.execute(stmt)
+    except Exception:
+        await session.rollback()
+        result = await session.execute(stmt)
+    existing_prompts = result.scalars().all()
+    
+    for existing in existing_prompts:
+        existing.is_active = False
+    
+    # 선택된 프롬프트 활성화
+    prompt.is_active = True
+    try:
+        await session.commit()
+        await session.refresh(prompt)
+        return prompt
+    except Exception:
+        await session.rollback()
+        raise
+
 ## removed response state helpers
 
 async def get_latest_ai_response(session: AsyncSession, conv_id: UUID) -> str | None:
