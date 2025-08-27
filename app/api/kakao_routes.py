@@ -399,7 +399,7 @@ import re
 # ======================================================================
 
 # 이름 추출을 위한 정규식 패턴들 (강화)
-_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|저를|날|나를)\s*', re.IGNORECASE)
+_NAME_PREFIX_PATTERN = re.compile(r'^(내\s*이름은|제\s*이름은|난|나는|저는|전|내|제|나|저|저를|날|나를|이름름)\s*', re.IGNORECASE)
 _NAME_SUFFIX_PATTERN = re.compile(r'\s*(라고|입니다|이에요|예요|에요|야|이야|합니다|불러|불러줘)\.?$', re.IGNORECASE)
 _NAME_REQUEST_PATTERN = re.compile(r'([가-힣]{2,4})\s*라고\s*불러', re.IGNORECASE)
 _KOREAN_NAME_PATTERN = re.compile(r'[가-힣]{2,4}')
@@ -435,7 +435,7 @@ PROFANITY = {
 COMMON_NON_NAME = {
     "학생","여자","남자","사람","개발자","디자이너","마케터","기획자","교사","선생","선생님", "사람", "동물", "짐승",
     "중학생","고등학생","대학생","취준생","직장인","아이","어른","친구","고객","사용자", 
-    "엄마","아빠","부모","형","누나","오빠","언니","동생", "친구", "친구들",
+    "엄마","아빠","부모","형","누나","오빠","언니","동생", "친구", "친구들", "너", "니"
     "학교","회사","집","병원","학원","카페","도서관","교회","역","지하철","버스"
 }
 
@@ -646,7 +646,16 @@ async def handle_name_flow(
                 # 비속어/보통명사/봇이름 즉시 차단
                 raw = clean_name(user_text)
                 if contains_profanity(raw) or is_common_non_name(raw) or is_bot_name(raw):
-                    return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
+                    response_text = "그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo"
+                    
+                    # 메시지 테이블에 저장
+                    try:
+                        await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                        logger.info(f"[메시지저장] 이름 차단 메시지 저장 완료")
+                    except Exception as e:
+                        logger.warning(f"[메시지저장] 이름 차단 메시지 저장 실패: {e}")
+                    
+                    return kakao_text(response_text)
 
                 test_result = test_name_extraction(user_text)
                 name = test_result['extracted_name']
@@ -665,9 +674,27 @@ async def handle_name_flow(
                             logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
                             PendingNameCache.clear(user_id)
                     else:
-                        return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
+                        response_text = "이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo"
+                        
+                        # 메시지 테이블에 저장
+                        try:
+                            await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                            logger.info(f"[메시지저장] 이름 형식 오류 메시지 저장 완료")
+                        except Exception as e:
+                            logger.warning(f"[메시지저장] 이름 형식 오류 메시지 저장 실패: {e}")
+                        
+                        return kakao_text(response_text)
                 else:
-                    return kakao_text("불리고 싶은 이름을 알려줘! 그럼 {prompt_name}가 꼭 기억할게~")
+                    response_text = f"불리고 싶은 이름을 알려줘! 그럼 {prompt_name}가 꼭 기억할게~"
+                    
+                    # 메시지 테이블에 저장
+                    try:
+                        await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                        logger.info(f"[메시지저장] 이름 요청 메시지 저장 완료")
+                    except Exception as e:
+                        logger.warning(f"[메시지저장] 이름 요청 메시지 저장 실패: {e}")
+                    
+                    return kakao_text(response_text)
 
             # 1-2) 인삿말이면 웰컴
             elif any(g in user_text.lower() for g in _GREETINGS):
@@ -1175,7 +1202,16 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 user_risk_history.last_check_score is None):
                 # 사용자가 체크 질문에 응답하지 않고 다른 말을 한 경우, 숫자만 재요청
                 logger.info(f"[CHECK] 체크 질문 발송 직후 무효 응답 -> 숫자 0~10만 다시 요청")
-                return kakao_text("0~10 중 숫자 하나로만 답해줘!")
+                response_text = "0~10 중 숫자 하나로만 답해줘!"
+                
+                # 메시지 테이블에 저장
+                try:
+                    await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                    logger.info(f"[메시지저장] 체크 질문 재요청 메시지 저장 완료")
+                except Exception as e:
+                    logger.warning(f"[메시지저장] 체크 질문 재요청 메시지 저장 실패: {e}")
+                
+                return kakao_text(response_text)
             else:
                 logger.info(f"[CHECK_DEBUG] 체크 질문 응답이 아님: 일반 대화로 진행")
                 # 일반 대화로 진행 (AI 응답 생성)
@@ -1225,6 +1261,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 check_questions = get_check_questions()
                 selected_question = random.choice(check_questions)
                 logger.info(f"[CHECK] 체크 질문 발송: {selected_question}")
+                
+                # 메시지 테이블에 저장
+                try:
+                    await save_message(session, conv_id, "assistant", selected_question, x_request_id, user_id=user_id)
+                    logger.info(f"[메시지저장] 체크 질문 발송 메시지 저장 완료")
+                except Exception as e:
+                    logger.warning(f"[메시지저장] 체크 질문 발송 메시지 저장 실패: {e}")
+                
                 return kakao_text(selected_question)
             except Exception as e:
                 logger.error(f"[CHECK] 체크 질문 발송 실패: {e}")
@@ -1249,33 +1293,87 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         logger.info(f"[RISK] 일반 대화 완료 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
 
         # ====== [이름 자동 추출 및 저장] ==============================================
-        # 사용자 발화에서 이름이 감지되면 자동으로 추출하고 저장
+        # 이름 패턴이 감지될 때만 검증하고 추출
         try:
-            extracted_name = extract_korean_name(user_text_stripped)
-            if extracted_name:
-                logger.info(f"[이름추출] 자동 감지: '{extracted_name}'")
+            # 이름 패턴이 감지되는지 먼저 확인
+            has_name_pattern = (
+                _NAME_PREFIX_PATTERN.search(user_text_stripped) or 
+                _NAME_SUFFIX_PATTERN.search(user_text_stripped) or
+                _NAME_REQUEST_PATTERN.search(user_text_stripped) or
+                _NAME_POLITE_PATTERN.search(user_text_stripped)
+            )
+            
+            if has_name_pattern:
+                logger.info(f"[이름패턴] 이름 패턴 감지: '{user_text_stripped}'")
                 
-                # 현재 사용자 정보 확인
-                user = await session.get(AppUser, user_id)
-                current_name = user.user_name if user else None
-                
-                # 이름이 다르거나 새로 설정되는 경우에만 저장
-                if not current_name or current_name != extracted_name:
-                    try:
-                        await save_user_name(session, user_id, extracted_name)
-                        logger.info(f"[이름저장] 자동 저장 완료: {user_id} -> {extracted_name}")
+                # 이름 추출 시도
+                extracted_name = extract_korean_name(user_text_stripped)
+                if extracted_name:
+                    logger.info(f"[이름추출] 자동 감지: '{extracted_name}'")
+                    
+                    # 검증: 비속어, 보통명사, 봇이름 체크
+                    if contains_profanity(extracted_name):
+                        logger.warning(f"[이름검증] 비속어 포함: '{extracted_name}'")
+                        response_text = "그 이름은 사용할 수 없어.\n한글/영문 1~20자로 네 이름을 알려줘!"
                         
-                        # 이름 변경 알림 메시지
-                        if current_name:
-                            name_response = kakao_text(f"알겠어! 앞으로 {extracted_name}(이)라고 부를게~ 🎉")
-                        else:
-                            name_response = kakao_text(f"반가워 {extracted_name}아(야)! 앞으로 {extracted_name}(이)라고 부를게🐥")
+                        # 메시지 테이블에 저장
+                        try:
+                            await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                        except Exception as e:
+                            logger.warning(f"[메시지저장] 비속어 차단 메시지 저장 실패: {e}")
                         
-                        return name_response
-                    except Exception as e:
-                        logger.error(f"[이름저장] 자동 저장 실패: {e}")
+                        return kakao_text(response_text)
+                    
+                    if is_common_non_name(extracted_name):
+                        logger.info(f"[이름검증] 보통명사 감지: '{extracted_name}' - 일반 대화로 처리")
+                        # 보통명사는 이름이 아니라 일반 대화로 간주하여 LLM에게 넘김
+                        extracted_name = None
+                    
+                    if is_bot_name(extracted_name):
+                        logger.warning(f"[이름검증] 봇이름 감지: '{extracted_name}'")
+                        response_text = "그건 내 이름이야! 너의 이름을 알려줘~"
+                        
+                        # 메시지 테이블에 저장
+                        try:
+                            await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                            logger.info(f"[메시지저장] 봇이름 차단 메시지 저장 완료")
+                        except Exception as e:
+                            logger.warning(f"[메시지저장] 봇이름 차단 메시지 저장 실패: {e}")
+                        
+                        return kakao_text(response_text)
+                    
+                    # 검증 통과 후 현재 사용자 정보 확인
+                    user = await session.get(AppUser, user_id)
+                    current_name = user.user_name if user else None
+                    
+                    # 이름이 다르거나 새로 설정되는 경우에만 저장
+                    if not current_name or current_name != extracted_name:
+                        try:
+                            await save_user_name(session, user_id, extracted_name)
+                            logger.info(f"[이름저장] 자동 저장 완료: {user_id} -> {extracted_name}")
+                            
+                            # 이름 변경 알림 메시지
+                            if current_name:
+                                response_text = f"알겠어! 앞으로 {extracted_name}(이)라고 부를게~ 🎉"
+                            else:
+                                response_text = f"반가워 {extracted_name}아(야)! 앞으로 {extracted_name}(이)라고 부를게🐥"
+                            
+                            # 메시지 테이블에 저장
+                            try:
+                                await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                                logger.info(f"[메시지저장] 이름 설정 성공 메시지 저장 완료")
+                            except Exception as e:
+                                logger.warning(f"[메시지저장] 이름 설정 성공 메시지 저장 실패: {e}")
+                            
+                            return kakao_text(response_text)
+                        except Exception as e:
+                            logger.error(f"[이름저장] 자동 저장 실패: {e}")
+                    else:
+                        logger.info(f"[이름추출] 이미 동일한 이름 사용 중: {extracted_name}")
                 else:
-                    logger.info(f"[이름추출] 이미 동일한 이름 사용 중: {extracted_name}")
+                    logger.info(f"[이름추출] 패턴은 감지되었으나 유효한 이름 추출 실패")
+            else:
+                logger.debug(f"[이름패턴] 이름 패턴 미감지: '{user_text_stripped}'")
         except Exception as e:
             logger.warning(f"[이름추출] 자동 추출 중 오류: {e}")
 
