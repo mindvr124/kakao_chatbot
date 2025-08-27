@@ -1221,9 +1221,16 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         ENABLE_CALLBACK = True
 
-        # 프롬프트 선택: 위험도 레벨 기반 사용 제거, 항상 기본 프롬프트 사용
-        prompt_name = "default"
-        logger.info(f"[PROMPT] 기본 프롬프트 사용: {prompt_name}")
+        # 프롬프트 선택: 사용자가 원하는 프롬프트를 선택할 수 있도록 수정
+        # TODO: 사용자별 프롬프트 설정 기능 추가
+        prompt_name = "default"  # 기본값은 "default"
+        
+        # 사용자가 특정 프롬프트를 요청했는지 확인 (예: "온유한 톤으로 답변해줘")
+        if "온유" in user_text or "따뜻" in user_text or "부드럽" in user_text:
+            prompt_name = "온유"
+            logger.info(f"[PROMPT] 사용자 요청에 따라 온유 프롬프트 사용: {prompt_name}")
+        else:
+            logger.info(f"[PROMPT] 기본 프롬프트 사용: {prompt_name}")
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)
