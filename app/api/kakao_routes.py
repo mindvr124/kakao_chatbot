@@ -31,6 +31,7 @@ from app.database.service import (
     upsert_user,
     decrement_check_question_turn_once,
     get_active_prompt_name,
+    get_risk_state,
 )
 from app.utils.utils import (
     extract_callback_url,
@@ -45,6 +46,7 @@ from app.database.service import (
     upsert_user,
     get_or_create_conversation,
     save_message,
+    get_check_question_turn,
 )
 from app.risk_mvp import (
     calculate_risk_score,
@@ -933,7 +935,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if user_id not in _RISK_HISTORIES:
             # 데이터베이스에서 기존 위험도 점수 복원 시도
             try:
-                from app.database.service import get_risk_state
                 existing_risk = await get_risk_state(session, user_id)
                 if existing_risk and existing_risk.score > 0:
                     # 기존 점수가 있으면 초기 턴으로 복원
@@ -965,7 +966,6 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             user_risk_history.user_id = user_id
         
         try:
-            from app.database.service import get_check_question_turn
             db_turn = await get_check_question_turn(session, user_id)
             if user_risk_history.check_question_turn_count != db_turn:
                 old_count = user_risk_history.check_question_turn_count
