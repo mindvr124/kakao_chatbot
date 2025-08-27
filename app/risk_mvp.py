@@ -47,8 +47,6 @@ class RiskHistory:
     
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
-        logger.info(f"[RISK_HISTORY] add_turn 시작: check_question_turn_count={self.check_question_turn_count}")
-        
         turn_analysis = self._analyze_single_turn(text)
         
         turn_data = {
@@ -62,35 +60,33 @@ class RiskHistory:
         self.turns.append(turn_data)
         self.last_updated = datetime.now()
         
-        # 현재 턴의 점수와 누적 점수를 모두 로깅
+        # 간결한 로깅
         current_turn_score = turn_analysis['score']
         cumulative_score = self.get_cumulative_score()
         
-        logger.info(f"[RISK_HISTORY] 턴 추가 완료: turns_after={len(self.turns)}, current_turn_score={current_turn_score}, cumulative_score={cumulative_score}, check_question_turn_count={self.check_question_turn_count}")
+        logger.info(f"[RISK] 턴 추가: 현재 {current_turn_score}점, 누적 {cumulative_score}점 (턴 {len(self.turns)}/20)")
         
         return turn_analysis
     
     def get_cumulative_score(self) -> int:
         """최근 턴들의 누적 위험도 점수를 계산합니다. 시간 기반 감점 없이 순수 누적만 적용."""
         if not self.turns:
-            logger.info(f"[RISK_HISTORY] 누적 점수 계산: 턴이 없음 -> 0")
             return 0
         
-        # 각 턴의 점수를 상세히 로깅
-        turn_details = []
-        for i, turn in enumerate(self.turns):
-            turn_details.append(f"턴{i+1}: {turn['score']}점('{turn['text'][:20]}...')")
+        # 각 턴의 점수를 간결하게 로깅 (최근 5턴만)
+        recent_turns = list(self.turns)[-5:] if len(self.turns) > 5 else list(self.turns)
+        turn_details = [f"턴{i+1}: {turn['score']}점" for i, turn in enumerate(recent_turns)]
         
-        logger.info(f"[RISK_HISTORY] 턴별 점수: {' | '.join(turn_details)}")
+        if len(self.turns) > 5:
+            logger.info(f"[RISK] 최근 5턴 점수: {' | '.join(turn_details)} (총 {len(self.turns)}턴)")
+        else:
+            logger.info(f"[RISK] 턴별 점수: {' | '.join(turn_details)}")
         
         # 각 턴의 최종 점수는 이미 긍정 발화 감점이 적용된 상태
-        # 따라서 단순히 턴별 점수를 합산하면 됨
         raw_total = sum(turn['score'] for turn in self.turns)
-        
-        # 최종 점수는 0점 이하로 가지 않도록 보장
         final_score = max(0, min(100, raw_total))
         
-        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={raw_total}, final_score={final_score}, turns_count={len(self.turns)}")
+        logger.info(f"[RISK] 누적 점수: {raw_total} → {final_score}점")
         return final_score
     
     def get_risk_trend(self) -> str:
@@ -212,90 +208,76 @@ class RiskHistory:
             return {'score': 0, 'flags': {}, 'evidence': []}
         
         text_lower = text.strip().lower()
-        logger.info(f"[RISK_ANALYSIS] 텍스트 분석 시작: '{text}' -> '{text_lower}'")
+        logger.info(f"[RISK] 입력: '{text[:30]}...'")
         
         flags = self._get_flags(text_lower)
-        logger.info(f"[RISK_ANALYSIS] 플래그 분석 결과: {flags}")
         
         # 메타언어, 3인칭, 관용어가 포함된 경우 점수 계산 제외
         if flags["meta"] or flags["third"] or flags["idiom"]:
-            logger.info(f"[RISK_ANALYSIS] 메타언어/3인칭/관용어로 인해 점수 계산 제외")
+            logger.info(f"[RISK] 메타/3인칭/관용어로 점수 계산 제외")
             return {'score': 0, 'flags': flags, 'evidence': []}
         
         total_score = 0
         evidence = []
-        matched_positions = set()  # 이미 매칭된 위치를 추적
-        
-        logger.info(f"[RISK_ANALYSIS] 패턴 매칭 시작: {len(RISK_PATTERNS)}개 점수 레벨")
+        matched_positions = set()
         
         # 각 점수별 정규식 패턴 검사 (높은 점수부터 순서대로)
         for score in sorted(RISK_PATTERNS.keys(), reverse=True):
-            logger.info(f"[RISK_ANALYSIS] {score}점 패턴 검사 시작")
             for pattern in RISK_PATTERNS[score]:
                 matches = list(pattern.finditer(text_lower))
-                logger.info(f"[RISK_ANALYSIS] {score}점 패턴 '{pattern.pattern}' 매칭 결과: {len(matches)}개")
-                
-                for match in matches:
-                    # 이미 매칭된 위치와 겹치는지 확인
-                    start, end = match.start(), match.end()
-                    matched_text = match.group()
-                    logger.info(f"[RISK_ANALYSIS] 매칭된 텍스트: '{matched_text}' (위치: {start}-{end})")
-                    
-                    if any(start < pos_end and end > pos_start for pos_start, pos_end in matched_positions):
-                        logger.info(f"[RISK_ANALYSIS] 겹치는 매칭으로 건너뛰기: '{matched_text}'")
-                        continue  # 겹치는 매칭은 건너뛰기
-                    
-                    # 특별한 위험 표현은 부정어가 있어도 점수 부여
-                    special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
-                    is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
-                    
-                    # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
-                    actual_score = 0 if (flags["neg"] and not is_special_danger) else score
-                    logger.info(f"[RISK_ANALYSIS] 점수 계산: original={score}, flags_neg={flags['neg']}, special_danger={is_special_danger}, actual={actual_score}")
-                    
-                    # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
-                    if flags["past"] and score >= 7:  # 7점 이상(자살 관련)만 차감
-                        old_score = actual_score
-                        actual_score = max(0, actual_score - 2)
-                        logger.info(f"[RISK_ANALYSIS] 과거시제로 인한 차감: {old_score} -> {actual_score}")
-                    
-                    if actual_score > 0:
-                        total_score += actual_score
-                        evidence.append({
-                            "keyword": matched_text,
-                            "score": actual_score,
-                            "original_score": score,
-                            "excerpt": self._get_context(text_lower, start, end)
-                        })
-                        # 매칭된 위치 기록
-                        matched_positions.add((start, end))
-                        logger.info(f"[RISK_ANALYSIS] 점수 추가: {actual_score}점, 누적: {total_score}점")
-                        break  # 이 점수 레벨에서는 하나만 매칭
-                    else:
-                        logger.info(f"[RISK_ANALYSIS] 점수 0으로 계산되어 추가하지 않음")
+                if matches:
+                    for match in matches:
+                        start, end = match.start(), match.end()
+                        matched_text = match.group()
+                        
+                        if any(start < pos_end and end > pos_start for pos_start, pos_end in matched_positions):
+                            continue
+                        
+                        # 특별한 위험 표현은 부정어가 있어도 점수 부여
+                        special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
+                        is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
+                        
+                        # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
+                        actual_score = 0 if (flags["neg"] and not is_special_danger) else score
+                        
+                        # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
+                        if flags["past"] and score >= 7:
+                            old_score = actual_score
+                            actual_score = max(0, actual_score - 2)
+                        
+                        if actual_score > 0:
+                            total_score += actual_score
+                            evidence.append({
+                                "keyword": matched_text,
+                                "score": actual_score,
+                                "original_score": score,
+                                "excerpt": self._get_context(text_lower, start, end)
+                            })
+                            matched_positions.add((start, end))
+                            break
         
-        logger.info(f"[RISK_ANALYSIS] 패턴 매칭 완료: 총 {total_score}점")
-        
-        # 긍정 발화 감점 적용 (-2점, 별도 기록하여 누적에서 차감)
-        logger.info(f"[RISK_ANALYSIS] 긍정 발화 패턴 검사: text='{text_lower}', P_POSITIVE.search 결과: {P_POSITIVE.search(text_lower)}")
-        
+        # 긍정 발화 감점 적용
         if P_POSITIVE.search(text_lower):
-            # 긍정 발화는 별도로 기록하되, 턴 점수는 0으로 유지
-            # 누적 점수 계산 시 긍정 발화 횟수만큼 차감
             evidence.append({
                 "keyword": "긍정_발화",
                 "score": -2,
                 "original_score": -2,
                 "excerpt": "긍정적인 발화로 인한 감점"
             })
-            
-            logger.info(f"[RISK_ANALYSIS] 긍정 발화 감점 기록: 턴 점수=0, 누적에서 -2점 차감 예정")
+            final_score = 0
+            logger.info(f"[RISK] 긍정 발화 감지: -2점, 턴 점수=0")
         else:
-            logger.info(f"[RISK_ANALYSIS] 긍정 발화 패턴 미매칭: text='{text_lower}'")
+            final_score = total_score
         
-        # 긍정 발화가 있으면 턴 점수는 0으로 반환 (누적에서 차감)
-        final_score = 0 if P_POSITIVE.search(text_lower) else total_score
-        logger.info(f"[RISK_ANALYSIS] 최종 분석 결과: score={final_score}, evidence_count={len(evidence)} (긍정 발화: {P_POSITIVE.search(text_lower) is not None})")
+        # 핵심 정보만 로깅
+        if evidence:
+            keywords = [f"{ev['keyword']}({ev['score']}점)" for ev in evidence if ev['keyword'] != '긍정_발화']
+            if keywords:
+                logger.info(f"[RISK] 키워드 감지: {', '.join(keywords)} → {final_score}점")
+            else:
+                logger.info(f"[RISK] 점수: {final_score}점")
+        else:
+            logger.info(f"[RISK] 점수: {final_score}점")
         
         return {
             'score': final_score,
@@ -382,25 +364,28 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                             "excerpt": _get_context(text_lower, match.start(), match.end())
                         })
         
-        # 긍정 발화 감점 적용 (-2점, 별도 기록하여 누적에서 차감)
-        logger.info(f"[RISK_HISTORY] 긍정 발화 패턴 검사: text='{text_lower}', P_POSITIVE.search 결과: {P_POSITIVE.search(text_lower)}")
-        
+        # 긍정 발화 감점 적용
         if P_POSITIVE.search(text_lower):
-            # 긍정 발화는 별도로 기록하되, 턴 점수는 0으로 유지
-            # 누적 점수 계산 시 긍정 발화 횟수만큼 차감
             evidence.append({
                 "keyword": "긍정_발화",
                 "score": -2,
                 "original_score": -2,
                 "excerpt": "긍정적인 발화로 인한 감점"
             })
-            logger.info(f"[RISK_HISTORY] 긍정 발화 감점 기록: 턴 점수=0, 누적에서 -2점 차감 예정")
+            final_score = 0
+            logger.info(f"[RISK] 긍정 발화 감지: -2점, 턴 점수=0")
         else:
-            logger.info(f"[RISK_HISTORY] 긍정 발화 패턴 미매칭: text='{text_lower}'")
+            final_score = total_score
         
-        # 긍정 발화가 있으면 턴 점수는 0으로 반환 (누적에서 차감)
-        final_score = 0 if P_POSITIVE.search(text_lower) else total_score
-        logger.info(f"[RISK_HISTORY] 최종 분석 결과: score={final_score}, evidence_count={len(evidence)} (긍정 발화: {P_POSITIVE.search(text_lower) is not None})")
+        # 핵심 정보만 로깅
+        if evidence:
+            keywords = [f"{ev['keyword']}({ev['score']}점)" for ev in evidence if ev['keyword'] != '긍정_발화']
+            if keywords:
+                logger.info(f"[RISK] 키워드 감지: {', '.join(keywords)} → {final_score}점")
+            else:
+                logger.info(f"[RISK] 점수: {final_score}점")
+        else:
+            logger.info(f"[RISK] 점수: {final_score}점")
         
         return final_score, flags, evidence
 
