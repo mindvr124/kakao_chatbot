@@ -5,36 +5,77 @@ from collections import deque
 from datetime import datetime, timedelta
 from loguru import logger
 
-# 점수별 정규식 패턴 정의
+# 공통 플래그
+FLAGS = re.IGNORECASE | re.UNICODE
+
+# 점수별 정규식 패턴 정의 (추가 키워드 보강 + 과오탐 완화)
 RISK_PATTERNS = {
     10: [  # 직접적, 구체적 자살 의도 및 수단 언급
-        re.compile(r"(자살|목숨\s*끊|삶\s*끝내|죽을래|죽으면\s*편하|뛰어내|수면제|옥상|약\s*먹|과다\s*복용|유서|죽고\s*싶|뒤지고\s*싶|죽자|죽어|죽\s*어)"),
+        re.compile(r"(자\s*살|극단\s*적?\s*선택|생을\s*마감|목숨\s*끊)", FLAGS),
+        re.compile(r"(죽고\s*싶(?!\s*지?\s*않)|죽을\s*(래|까)|죽으면\s*편하|죽자|뒤지고\s*싶)", FLAGS),
+        re.compile(r"(뛰어\s*내리\w*|투신|목\s*매|유서|유언장|옥상|다리|교각|난간|철로|선로)", FLAGS),
+        re.compile(r"(수면제|과다\s*복용|연탄\s*가스|번개탄|질소\s*가스|헬륨\s*가스|배기\s*가스)", FLAGS),
+        re.compile(r"(약\s*먹고\s*죽|독극물|청산가리|살충제|농약\s*먹)", FLAGS),
     ],
-    7: [   # 간접적 자살 사고 표현
-        re.compile(r"(살기\s*싫|사라지고\s*싶|없어지고\s*싶|흔적\s*없이|끝내고\s*싶|포기\s*할래|포기\s*하|의미\s*없|살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)"),
+    7: [   # 간접적 자살 사고 표현 / NSSI
+        re.compile(r"(살기\s*싫|살\s*의\s*의미\s*없|사라지고\s*싶|없어지고\s*싶|흔적\s*없이\s*사라지\w*|"
+                    r"모든\s*걸\s*끝내고\s*싶|끝내고\s*싶|포기\s*하(?:겠|고|려|자)|"
+                    r"살고\s*싶지\s*않|살고\s*싶지않|살고\s*싶진\s*않)", FLAGS),
+        re.compile(r"(자해|손목\s*긋|피를\s*내고\s*싶|칼로\s*베|면도날|흉기\s*로)", FLAGS),
     ],
     4: [   # 자존감 저하·학대·왕따 등
-        re.compile(r"(쓸모\s*없|필요\s*없|잘못된\s*사람|아무것도\s*못\s*해|내\s*탓|내가\s*문제|맞았어|괴롭힘|왕따|따돌림|욕설|부모\s*맞았|무서워|때리|때려|몽둥이|폭력)")
+        re.compile(r"(무시|모욕|욕설|괴롭힘|왕따|따돌림|때리|폭력|맞았(?:어|다)?|학대|가정\s*폭력|부모\s*맞았)", FLAGS),
+        re.compile(r"(쓰레기\s*같|패배자|실패자|망했[다어]|다\s*망쳐|쓸мо\s*없|필요\s*없|가치\s*없|"
+                    r"한심|찌질|자괴감|자책|아무것도\s*못\s*해|내\s*탓|내가\s*문제|"
+                    r"태어나지\s*말|태어난\s*게|왜\s*낳았(?:어|어요)?|왜\s*태어)", FLAGS),
+        re.compile(r"(두려워|무서워|겁나)", FLAGS),
     ],
     2: [   # 일반적 스트레스·우울 신호
-        re.compile(r"(힘들|지쳤|하기\s*싫|의욕\s*없|지친다|지쳐|기운\s*없|혼자\s*있고\s*싶|외롭|숨\s*막힌다|우울|무기력|숨막\s*)"),
+        re.compile(r"(힘들|지쳤|지쳐|하기\s*싫|의욕\s*없|기운\s*없|외롭|혼자\s*있고?\s*싶|"
+                    r"불안|초조|공황|패닉|불면|잠이\s*안\s*와|잠을\s*못\s*자)", FLAGS),
+        re.compile(r"(숨\s*막(?:히|힌다|히는|혀)\w*|가슴\s*답답|답답)", FLAGS),
+        re.compile(r"(우울|무기력|번아웃|벅차|버겁|공허|허무|울고\s*싶|울었어|눈물\s*나)", FLAGS),
+        re.compile(r"(고립|소외|외톨|귀찮|떨려|떨리|멘붕|멘탈\s*나가)", FLAGS),
     ]
 }
 
 # 부정어, 메타언어, 3인칭, 관용어, 과거시제 패턴
-# 부정어: 일반적인 부정 표현 (하지만 "살고싶지않아" 같은 위험 표현은 제외)
-P_NEG = re.compile(r"(죽고\s*싶지\s*않|죽고\s*싶진\s*않|싶냐)")
-P_META = re.compile(r"(뉴스|기사|드라마|가사|영화|예시|논문|수업|연구|애니|소설설)")
-P_THIRD = re.compile(r"(친구|사람들|누가|그[가녀])")
-P_IDIOM = re.compile(r"(죽을맛|웃겨\s*죽|맛\s*죽이)")
-P_PAST = re.compile(r"(예전에|한때|옛날에|과거에)")
+# 부정어: 일반 부정(단, '살고싶지않아' 등은 특수 처리)
+P_NEG = re.compile(
+    r"(않(?:아|아요|았|을|지|고)?|안\s*(?:하|해|할|합니다)|싫(?:어|다|습니다)|원치\s*않|"
+    r"생각\s*없(?:어|다)|아니(?:야|다))", FLAGS
+)
+
+P_META = re.compile(
+    r"(뉴스|기사|드라마|가사|영화|예시|논문|수업|연구|애니|소설|웹툰|유튜브|틱톡|대사|인용|"
+    r"캡처|캡쳐|링크|출처|발췌|댓글|커뮤|포럼|밈)", FLAGS
+)
+
+P_THIRD = re.compile(
+    r"(친구|지인|동료|선배|후배|사람들|누가|그(?:가|녀|분)?|그\s*사람|타인|고객|환자|사용자|"
+    r"가족|엄마|아빠|부모|형|누나|오빠|언니|동생|아들|딸)(?:\s|[은는이가의을를]|에게|한테)", FLAGS
+)
+
+# 관용적 과장표현(완화): 수식어 + '~죽겠다', '죽을 맛', '맛 죽이네'
+P_IDIOM = re.compile(
+    r"((웃겨|배고파|졸려|피곤|아파|힘들|심심|추워|더워|어지러워|부끄러워|귀찮)"
+    r"\s*죽겠(?:다|네|어|음))|(죽을\s*맛)|(맛\s*죽이(?:네|다))", FLAGS
+)
+
+# 과거 회고(완화)
+P_PAST = re.compile(
+    r"(예전에|한때|옛날에|과거에|어릴\s*때|어렸을\s*때|학창\s*시절|중학생\s*때|고등학생\s*때|군대에서)", FLAGS
+)
 
 # 긍정 발화 패턴 (감점 적용)
-P_POSITIVE = re.compile(r"(괜찮아|괜찮|나아졌어|덜\s*힘들|고마워|좋아졌어|살아야지|희망이\s*생|내일은\s*괜찮|얘기\s*마음이\s*가벼|죽고\s*싶지\s*않아|그럴\s*생각\s*없어|이제\s*좀\s*괜찮은\s*것\s*같아)")
+P_POSITIVE = re.compile(
+    r"(괜찮아|괜찮|나아졌어|덜\s*힘들|고마워|좋아졌어|살아야지|살만\s*하|희망이\s*생|"
+    r"내일은\s*괜찮|얘기하니\s*마음이\s*가벼|죽고\s*싶지\s*않아|그럴\s*생각\s*없어|"
+    r"이겨낼|버텨볼게|이제\s*좀\s*괜찮은\s*것\s*같아|도움이\s*됐어)", FLAGS
+)
 
 class RiskHistory:
     """사용자별 위험도 대화 히스토리를 관리하는 클래스"""
-    
     def __init__(self, max_turns: int = 20, user_id: str = None, db_session = None):
         self.turns = deque(maxlen=max_turns)
         self.max_turns = max_turns
@@ -44,11 +85,9 @@ class RiskHistory:
         self.user_id = user_id
         self.db_session = db_session
         logger.info(f"[RISK_HISTORY] RiskHistory 객체 생성: user_id={user_id}, check_question_turn_count={self.check_question_turn_count}")
-    
     def add_turn(self, text: str) -> Dict:
         """새로운 턴을 추가하고 위험도를 분석합니다."""
         turn_analysis = self._analyze_single_turn(text)
-        
         turn_data = {
             'text': text,
             'timestamp': datetime.now(),
@@ -56,54 +95,37 @@ class RiskHistory:
             'flags': turn_analysis['flags'],
             'evidence': turn_analysis['evidence']
         }
-        
         self.turns.append(turn_data)
         self.last_updated = datetime.now()
-        
-        # 간결한 로깅
         current_turn_score = turn_analysis['score']
         cumulative_score = self.get_cumulative_score()
-        
         logger.info(f"[RISK] 턴 추가: 현재 {current_turn_score}점, 누적 {cumulative_score}점 (턴 {len(self.turns)}/20)")
-        
         return turn_analysis
-    
     def get_cumulative_score(self) -> int:
         """최근 턴들의 누적 위험도 점수를 계산합니다. 시간 기반 감점 없이 순수 누적만 적용."""
         if not self.turns:
             return 0
-        
-        # 각 턴의 점수를 간결하게 로깅 (최근 5턴만)
         recent_turns = list(self.turns)[-5:] if len(self.turns) > 5 else list(self.turns)
         turn_details = [f"턴{i+1}: {turn['score']}점" for i, turn in enumerate(recent_turns)]
-        
         if len(self.turns) > 5:
             logger.info(f"[RISK] 최근 5턴 점수: {' | '.join(turn_details)} (총 {len(self.turns)}턴)")
         else:
             logger.info(f"[RISK] 턴별 점수: {' | '.join(turn_details)}")
-        
-        # 각 턴의 최종 점수는 이미 긍정 발화 감점이 적용된 상태
         raw_total = sum(turn['score'] for turn in self.turns)
         final_score = max(0, min(100, raw_total))
-        
         logger.info(f"[RISK] 누적 점수: {raw_total} → {final_score}점")
         return final_score
-    
     def get_risk_trend(self) -> str:
         """위험도 변화 추세를 분석합니다."""
         if len(self.turns) < 2:
             return "stable"
-        
-        recent_scores = [turn['score'] for turn in list(self.turns)[-5:]]  # 최근 5턴으로 확장
-        
+        recent_scores = [turn['score'] for turn in list(self.turns)[-5:]]
         if len(recent_scores) >= 2:
             if recent_scores[-1] > recent_scores[-2]:
                 return "increasing"
             elif recent_scores[-1] < recent_scores[-2]:
                 return "decreasing"
-        
         return "stable"
-    
     def get_recent_evidence(self, max_items: int = 5) -> List[Dict]:
         """최근 증거들을 수집합니다."""
         evidence = []
@@ -112,28 +134,22 @@ class RiskHistory:
             if len(evidence) >= max_items:
                 break
         return evidence[:max_items]
-    
     def mark_check_question_sent(self):
         """체크 질문이 발송되었음을 기록합니다."""
         old_count = self.check_question_turn_count
         self.check_question_turn_count = 20  # 20턴 카운트다운 시작
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 기록: {old_count} -> {self.check_question_turn_count} (호출 스택: {self._get_caller_info()})")
-        
-        # 데이터베이스에도 동기화
         if self.user_id and self.db_session:
             try:
                 import asyncio
                 from app.database.service import mark_check_question_sent
-                # 비동기 함수를 동기적으로 실행
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # 이미 실행 중인 루프가 있으면 새로 생성
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 loop.run_until_complete(mark_check_question_sent(self.db_session, self.user_id))
             except Exception as e:
                 logger.error(f"[RISK_HISTORY] DB 체크 질문 발송 기록 실패: {e}")
-    
     def _get_caller_info(self) -> str:
         """호출자 정보를 반환합니다."""
         import inspect
@@ -148,17 +164,14 @@ class RiskHistory:
         except:
             pass
         return "unknown"
-    
     def sync_with_database(self):
         """데이터베이스와 메모리 상태를 동기화합니다."""
         if self.user_id and self.db_session:
             try:
                 import asyncio
                 from app.database.service import get_check_question_turn
-                # 비동기 함수를 동기적으로 실행
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # 이미 실행 중인 루프가 있으면 새로 생성
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 db_turn = loop.run_until_complete(get_check_question_turn(self.db_session, self.user_id))
@@ -169,58 +182,42 @@ class RiskHistory:
                     logger.info(f"[RISK_HISTORY] DB 동기화 완료: {old_count} -> {self.check_question_turn_count}")
             except Exception as e:
                 logger.error(f"[RISK_HISTORY] DB 동기화 실패: {e}")
-    
     def can_send_check_question(self) -> bool:
         """체크 질문을 발송할 수 있는지 확인합니다."""
-        # check_question_turn_count가 0이면 체크 질문 발송 가능
         can_send = self.check_question_turn_count == 0
         logger.info(f"[RISK_HISTORY] 체크 질문 발송 가능 여부: check_question_turn_count={self.check_question_turn_count}, can_send={can_send}")
         return can_send
-    
     def process_check_question_response(self, response_text: str) -> Optional[int]:
         """체크 질문 응답을 처리하고 점수를 저장합니다."""
         logger.info(f"[RISK_HISTORY] 체크 질문 응답 처리 시작: '{response_text}'")
-        
-        # 점수 파싱
         parsed_score = parse_check_response(response_text)
-        
         if parsed_score is not None:
             self.last_check_score = parsed_score
             logger.info(f"[RISK_HISTORY] 체크 질문 응답 점수 저장: {parsed_score}")
         else:
             logger.info(f"[RISK_HISTORY] 체크 질문 응답 파싱 실패")
-        
         return parsed_score
-    
     def reset_check_question_state(self):
         """체크 질문 관련 상태를 초기화합니다."""
         old_score = self.last_check_score
         old_count = self.check_question_turn_count
-        
         self.last_check_score = None
         self.check_question_turn_count = 0
-        
         logger.info(f"[RISK_HISTORY] 체크 질문 상태 초기화: last_check_score={old_score}->None, check_question_turn_count={old_count}->0")
-    
     def _analyze_single_turn(self, text: str) -> Dict:
         """단일 텍스트의 위험도를 분석합니다."""
         if not text:
             return {'score': 0, 'flags': {}, 'evidence': []}
-        
         text_lower = text.strip().lower()
         logger.info(f"[RISK] 입력: '{text[:30]}...'")
-        
         flags = self._get_flags(text_lower)
-        
         # 메타언어, 3인칭, 관용어가 포함된 경우 점수 계산 제외
         if flags["meta"] or flags["third"] or flags["idiom"]:
             logger.info(f"[RISK] 메타/3인칭/관용어로 점수 계산 제외")
             return {'score': 0, 'flags': flags, 'evidence': []}
-        
         total_score = 0
         evidence = []
         matched_positions = set()
-        
         # 각 점수별 정규식 패턴 검사 (높은 점수부터 순서대로)
         for score in sorted(RISK_PATTERNS.keys(), reverse=True):
             for pattern in RISK_PATTERNS[score]:
@@ -229,22 +226,17 @@ class RiskHistory:
                     for match in matches:
                         start, end = match.start(), match.end()
                         matched_text = match.group()
-                        
                         if any(start < pos_end and end > pos_start for pos_start, pos_end in matched_positions):
                             continue
-                        
                         # 특별한 위험 표현은 부정어가 있어도 점수 부여
                         special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
-                        is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
-                        
-                        # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
+                        is_special_danger = any(pat in matched_text for pat in special_danger_patterns)
+                        # 부정어 포함 시 차감(특수 위험 표현 제외)
                         actual_score = 0 if (flags["neg"] and not is_special_danger) else score
-                        
-                        # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
+                        # 과거시제 포함 시 7점 이상은 2점 감점
                         if flags["past"] and score >= 7:
                             old_score = actual_score
                             actual_score = max(0, actual_score - 2)
-                        
                         if actual_score > 0:
                             total_score += actual_score
                             evidence.append({
@@ -255,8 +247,7 @@ class RiskHistory:
                             })
                             matched_positions.add((start, end))
                             break
-        
-        # 긍정 발화 감점 적용
+        # 긍정 발화 감점
         if P_POSITIVE.search(text_lower):
             evidence.append({
                 "keyword": "긍정_발화",
@@ -264,12 +255,10 @@ class RiskHistory:
                 "original_score": -2,
                 "excerpt": "긍정적인 발화로 인한 감점"
             })
-            final_score = 0
-            logger.info(f"[RISK] 긍정 발화 감지: -2점, 턴 점수=0")
+            final_score = total_score + (-2)
+            logger.info(f"[RISK] 긍정 발화 감지: -2점, 최종 턴 점수={final_score}")
         else:
             final_score = total_score
-        
-        # 핵심 정보만 로깅
         if evidence:
             keywords = [f"{ev['keyword']}({ev['score']}점)" for ev in evidence if ev['keyword'] != '긍정_발화']
             if keywords:
@@ -278,13 +267,11 @@ class RiskHistory:
                 logger.info(f"[RISK] 점수: {final_score}점")
         else:
             logger.info(f"[RISK] 점수: {final_score}점")
-        
         return {
             'score': final_score,
             'flags': flags,
             'evidence': evidence
         }
-    
     def _get_flags(self, text: str) -> Dict[str, bool]:
         """텍스트에서 특수 플래그들을 탐지합니다."""
         return {
@@ -295,7 +282,6 @@ class RiskHistory:
             "past": bool(P_PAST.search(text)),
             "positive": bool(P_POSITIVE.search(text))
         }
-    
     def _get_context(self, text: str, start: int, end: int, context_chars: int = 10) -> str:
         """키워드 주변 문맥을 추출합니다."""
         try:
@@ -308,53 +294,30 @@ class RiskHistory:
 def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[int, Dict[str, bool], List[Dict]]:
     """
     텍스트의 자살위험도를 점수로 계산합니다.
-    
-    Args:
-        text: 분석할 텍스트
-        risk_history: 위험도 히스토리 객체 (제공시 누적 점수 반환)
-    
-    Returns:
-        Tuple[int, Dict[str, bool], List[Dict]]: (점수, 플래그, 증거)
     """
     if risk_history:
-        # 히스토리를 고려한 누적 분석
         turn_analysis = risk_history.add_turn(text)
         cumulative_score = risk_history.get_cumulative_score()
-        
         return cumulative_score, turn_analysis['flags'], risk_history.get_recent_evidence()
     else:
-        # 단일 텍스트 분석 (기존 방식)
         if not text:
             return 0, {}, []
-        
         text_lower = text.strip().lower()
         flags = _get_flags(text_lower)
-        
-        # 메타언어, 3인칭, 관용어가 포함된 경우 점수 계산 제외
         if flags["meta"] or flags["third"] or flags["idiom"]:
             return 0, flags, []
-        
         total_score = 0
         evidence = []
-        
-        # 각 점수별 정규식 패턴 검사
         for score, patterns in RISK_PATTERNS.items():
             for pattern in patterns:
                 matches = pattern.finditer(text_lower)
                 for match in matches:
                     matched_text = match.group()
-                    
-                    # 특별한 위험 표현은 부정어가 있어도 점수 부여
                     special_danger_patterns = ["살고싶지않", "살고싶지 않", "살고싶진 않"]
-                    is_special_danger = any(pattern in matched_text for pattern in special_danger_patterns)
-                    
-                    # 부정어가 포함된 경우 점수 차감 (단, 특별한 위험 표현은 제외)
+                    is_special_danger = any(pat in matched_text for pat in special_danger_patterns)
                     actual_score = 0 if (flags["neg"] and not is_special_danger) else score
-                    
-                    # 과거시제가 포함된 경우 자살 관련 키워드 점수 차감
-                    if flags["past"] and score >= 7:  # 7점 이상(자살 관련)만 차감
+                    if flags["past"] and score >= 7:
                         actual_score = max(0, actual_score - 2)
-                    
                     if actual_score > 0:
                         total_score += actual_score
                         evidence.append({
@@ -363,8 +326,6 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                             "original_score": score,
                             "excerpt": _get_context(text_lower, match.start(), match.end())
                         })
-        
-        # 긍정 발화 감점 적용
         if P_POSITIVE.search(text_lower):
             evidence.append({
                 "keyword": "긍정_발화",
@@ -376,8 +337,6 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
             logger.info(f"[RISK] 긍정 발화 감지: -2점, 턴 점수=0")
         else:
             final_score = total_score
-        
-        # 핵심 정보만 로깅
         if evidence:
             keywords = [f"{ev['keyword']}({ev['score']}점)" for ev in evidence if ev['keyword'] != '긍정_발화']
             if keywords:
@@ -386,7 +345,6 @@ def calculate_risk_score(text: str, risk_history: RiskHistory = None) -> Tuple[i
                 logger.info(f"[RISK] 점수: {final_score}점")
         else:
             logger.info(f"[RISK] 점수: {final_score}점")
-        
         return final_score, flags, evidence
 
 def _get_flags(text: str) -> Dict[str, bool]:
@@ -411,28 +369,18 @@ def _get_context(text: str, start: int, end: int, context_chars: int = 10) -> st
 def should_send_check_question(score: int, risk_history: RiskHistory = None) -> bool:
     """체크 질문을 발송해야 하는지 판단합니다."""
     logger.info(f"[CHECK_CONDITION] 체크 질문 발송 조건 확인: score={score}, risk_history={risk_history is not None}")
-    
-    # 기본 점수 조건 확인
     if score < 8:
         logger.info(f"[CHECK_CONDITION] 점수 조건 미충족: {score} < 8")
         return False
-    
     logger.info(f"[CHECK_CONDITION] 점수 조건 충족: {score} >= 8")
-    
-    # RiskHistory가 제공된 경우 추가 조건 확인
     if risk_history:
         can_send = risk_history.can_send_check_question()
         logger.info(f"[CHECK_CONDITION] RiskHistory 조건 확인: can_send={can_send}, check_question_turn_count={risk_history.check_question_turn_count}")
-        
-        # can_send가 True면 바로 반환
         if can_send:
             logger.info(f"[CHECK_CONDITION] can_send가 True이므로 체크 질문 발송 가능")
             return True
-        
         logger.info(f"[CHECK_CONDITION] can_send가 False이므로 체크 질문 발송 불가")
         return False
-    
-    # RiskHistory가 없는 경우 기본 점수 조건만 확인
     logger.info(f"[CHECK_CONDITION] RiskHistory 없음, 기본 점수 조건만 확인")
     return True
 
@@ -451,43 +399,27 @@ def get_invalid_score_message() -> str:
 def parse_check_response(text: str) -> Optional[int]:
     """체크 질문 응답에서 점수를 파싱합니다."""
     import re
-    
     logger.info(f"[PARSE_DEBUG] 체크 응답 파싱 시작: text='{text}'")
-    
-    # 입력 텍스트 정리 (공백 제거, 소문자 변환)
     text_clean = text.strip().lower()
-    
-    # 정확히 0~10 범위의 정수만 매칭 (단독 숫자 또는 숫자만 포함된 텍스트)
-    # 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10만 허용
     exact_match = re.match(r'^(0|1|2|3|4|5|6|7|8|9|10)$', text_clean)
-    
     if exact_match:
         score = int(exact_match.group())
         logger.info(f"[PARSE_DEBUG] 정확한 점수 매칭: {score}")
         return score
-    
-    # "1점", "2점", "1 점" 등의 패턴 매칭
     point_pattern = re.match(r'^(\d+)\s*점?$', text_clean)
     if point_pattern:
         score = int(point_pattern.group(1))
         logger.info(f"[PARSE_DEBUG] 점수 패턴 매칭: {score}점")
-        
-        # 0~10 범위 검증
         if 0 <= score <= 10:
             logger.info(f"[PARSE_DEBUG] 유효한 점수 확인: {score}")
             return score
         else:
             logger.info(f"[PARSE_DEBUG] 점수 범위 초과: {score} (0-10 범위 아님)")
-    
-    # 숫자만 추출하여 확인 (fallback)
     numbers = re.findall(r'\b([0-9]|10)\b', text_clean)
     logger.info(f"[PARSE_DEBUG] 정규식 매칭 결과: {numbers}")
-    
     if numbers:
         score = int(numbers[0])
         logger.info(f"[PARSE_DEBUG] 추출된 점수: {score}")
-        
-        # 0~10 범위 검증
         if 0 <= score <= 10:
             logger.info(f"[PARSE_DEBUG] 유효한 점수 확인: {score}")
             return score
@@ -495,7 +427,6 @@ def parse_check_response(text: str) -> Optional[int]:
             logger.info(f"[PARSE_DEBUG] 점수 범위 초과: {score} (0-10 범위 아님)")
     else:
         logger.info(f"[PARSE_DEBUG] 숫자를 찾을 수 없음")
-    
     logger.info(f"[PARSE_DEBUG] 파싱 실패: None 반환")
     return None
 

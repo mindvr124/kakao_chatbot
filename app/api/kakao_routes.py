@@ -973,7 +973,20 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             for i, turn in enumerate(recent_turns):
                 logger.info(f"[RISK_DEBUG] 최근 턴 {i+1}: score={turn['score']}, text='{turn['text'][:30]}...'")
             
-            # ====== [긴급 위험도 즉시 처리] ==============================================
+                    # 긴급 응답 플래그가 설정된 경우 카운트다운
+        if hasattr(user_risk_history, 'urgent_response_sent') and user_risk_history.urgent_response_sent:
+            if hasattr(user_risk_history, 'urgent_response_turn_count'):
+                user_risk_history.urgent_response_turn_count -= 1
+                if user_risk_history.urgent_response_turn_count <= 0:
+                    user_risk_history.urgent_response_sent = False
+                    user_risk_history.urgent_response_turn_count = 0
+                    logger.info(f"[URGENT] 긴급 응답 플래그 해제 완료")
+                else:
+                    logger.info(f"[URGENT] 긴급 응답 플래그 카운트다운: {user_risk_history.urgent_response_turn_count}턴 남음")
+        
+        # ====== [긴급 위험도 즉시 처리] ==============================================
+        # 긴급 응답 플래그가 설정되지 않은 경우에만 검출
+        if not (hasattr(user_risk_history, 'urgent_response_sent') and user_risk_history.urgent_response_sent):
             # 20턴과 별개로 최근 5턴 이내에 10점 키워드가 2번 이상이면 즉시 긴급 연락처
             if len(recent_turns) >= 2:
                 high_risk_count = sum(1 for turn in recent_turns if turn['score'] == 10)
@@ -992,8 +1005,19 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     except Exception as e:
                         logger.warning(f"[URGENT] urgent_risk_trigger 로그 저장 실패: {e}")
                     
-                    # 긴급 연락처 안내 후 점수 유지 (turns 초기화하지 않음)
-                    logger.info(f"[URGENT] 긴급 연락처 안내 후 점수 유지: turns_count={len(user_risk_history.turns)}, check_question_turn_count={user_risk_history.check_question_turn_count}")
+                    # 긴급 응답 후 무한 반복 방지: 최근 5턴만 제거하고 긴급 응답 플래그 설정
+                    try:
+                        # 최근 5턴만 제거 (turns.clear() 대신)
+                        for _ in range(min(5, len(user_risk_history.turns))):
+                            user_risk_history.turns.pop()
+                        
+                        # 긴급 응답 플래그 설정 (다음 3턴 동안 재검출 방지)
+                        user_risk_history.urgent_response_sent = True
+                        user_risk_history.urgent_response_turn_count = 3
+                        
+                        logger.info(f"[URGENT] 최근 5턴 제거 및 긴급 응답 플래그 설정 완료")
+                    except Exception as e:
+                        logger.warning(f"[URGENT] 턴 제거 및 플래그 설정 실패: {e}")
                     
                     return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
         
