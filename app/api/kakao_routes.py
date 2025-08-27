@@ -57,6 +57,9 @@ from app.risk_mvp import (
     get_invalid_score_message,
 )
 
+# 라우터 정의
+router = APIRouter()
+
 # 상수 정의
 CHECK_QUESTION_TURN_COUNT = 20
 CALLBACK_TIMEOUT = 4.5
