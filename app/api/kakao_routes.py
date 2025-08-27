@@ -734,11 +734,10 @@ async def handle_name_flow(
 ) -> Optional[JSONResponse]:
     """
     이름 관련 플로우를 처리합니다.
-      - 이름이 없으면: 인삿말/안내 후 대기상태 → 입력을 이름으로 저장
-      - 대기 중엔: 비속어/보통명사/봇이름 즉시 차단하고 재요청
-      - '잘못 알고 있는 걸까?' 응답 감지 시 정정 창구(3턴) 오픈
-      - 정정 창구 중엔 pick_candidate_name로만 저장 허용
-      - "~라고 불러줘" 자동 추출 및 '/이름 xxx'도 동일 정책 적용
+      - '내가 기억하는 네 이름은 ... 잘못 알고 있는 걸까?' 직후 3턴: 정정 입력만 저장
+      - 대기 상태에서는 후보 선택기 기반으로만 저장
+      - 비속어/보통명사/봇이름 차단
+      - '~라고 불러줘' 자동 추출, '/이름 xxx' 슬래시 지원
     """
     try:
         prompt_name = await get_active_prompt_name(session)
@@ -766,11 +765,10 @@ async def handle_name_flow(
                     NameDisputeWindow.tick(user_id)
                     return kakao_text("앗, 저장에 문제가 있었어. 한 번만 더 알려줄래?")
             else:
-                # 후보가 없거나 부적절 → 창구 1턴 감소 후 가이드
                 NameDisputeWindow.tick(user_id)
                 if NameDisputeWindow.is_open(user_id):
                     return kakao_text("혹시 바꿀 이름만 간단히 말해줄래? 예) 민수")
-                # 만료되면 이후 일반 플로우 계속 진행
+                # 만료되면 아래 일반 플로우 계속
 
         # ---- 1) 이름 없는 사용자 -------------------------------------------
         if user is None or user.user_name is None:
@@ -786,31 +784,22 @@ async def handle_name_flow(
                         pass
                     return kakao_text(response_text)
 
-                test_result = test_name_extraction(user_text)
-                name = test_result['extracted_name']
-                if name:
-                    cand = test_result['cleaned_name']
-                    if test_result['is_valid']:
+                # 후보 선택기(정확히 이름만)
+                cand = pick_candidate_name(user_text)
+                if cand and is_valid_name(cand):
+                    try:
+                        await save_user_name(session, user_id, cand)
+                        PendingNameCache.clear(user_id)
                         try:
-                            await save_user_name(session, user_id, cand)
-                            PendingNameCache.clear(user_id)
-                            try:
-                                await save_log_message(session, "name_saved", f"Name saved: {cand}", str(user_id), conv_id, {"source": "name_flow", "name": cand, "mode": "first_chat", "x_request_id": x_request_id})
-                            except Exception:
-                                pass
-                            return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🐥")
-                        except Exception as e:
-                            logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
-                            PendingNameCache.clear(user_id)
-                    else:
-                        response_text = "이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo"
-                        try:
-                            await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
+                            await save_log_message(session, "name_saved", f"Name saved: {cand}", str(user_id), conv_id, {"source": "name_flow", "name": cand, "mode": "first_chat", "x_request_id": x_request_id})
                         except Exception:
                             pass
-                        return kakao_text(response_text)
+                        return kakao_text(f"반가워 {cand}아(야)! 앞으로 {cand}(이)라고 부를게🐥")
+                    except Exception as e:
+                        logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
+                        PendingNameCache.clear(user_id)
                 else:
-                    response_text = f"불리고 싶은 이름을 알려줘! 그럼 {prompt_name}가 꼭 기억할게~"
+                    response_text = "이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo"
                     try:
                         await save_message(session, conv_id, "assistant", response_text, x_request_id, user_id=user_id)
                     except Exception:
@@ -888,7 +877,7 @@ async def handle_name_flow(
                 PendingNameCache.clear(user_id)
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
 
-        # ---- 2-1.6) '이름' 관련 대화 → LLM 응답에서 트리거 감지 -------------
+        # ---- 2-1.6) '이름' 대화 → LLM 응답에서 트리거 감지 -------------------
         if user and user.user_name and "이름" in user_text and conv:
             logger.info(f"[검사] 사용자 발화에 '이름' 포함: '{user_text}'")
             try:
@@ -896,7 +885,7 @@ async def handle_name_flow(
                     session=session,
                     conv_id=conv.conv_id,
                     user_input=user_text,
-                    prompt_name="온유",  # 프롬프트 이름
+                    prompt_name="온유",
                     user_id=user_id,
                     request_id=x_request_id
                 )
@@ -947,7 +936,6 @@ async def handle_name_flow(
                         content={"version": "2.0", "template": {"outputs":[{"simpleText":{"text": ai_response}}]}},
                         media_type="application/json; charset=utf-8"
                     )
-
             except Exception as e:
                 logger.warning(f"[경고] AI 응답 생성 오류: {e}")
                 # 실패 시 아래 fallback 로직으로
@@ -1027,11 +1015,11 @@ def _safe_reply_kakao(risk_level: str) -> dict:
     # 위험도 레벨에 따른 안전 응답 생성
     if risk_level == "critical":
         msg = (
-            "지금 상황이 매우 심각해 보여. 즉시 도움을 받아야 해.\n"
+            "현재 상태는 위험해 보여. 즉시 도움을 받아야 해.\n"
             "• 자살예방 상담전화 1393 (24시간)\n"
             "• 정신건강 위기상담 1577-0199\n"
             "• 긴급상황: 112/119\n"
-            "혼자가 아니야. 지금 당장 연락해줘."
+            "넌 혼자가 아니야. 지금 바로 연락해 줘."
         )
     else:  # high level
         msg = (
