@@ -106,13 +106,9 @@ class RiskHistory:
             return 0
         recent_turns = list(self.turns)[-5:] if len(self.turns) > 5 else list(self.turns)
         turn_details = [f"턴{i+1}: {turn['score']}점" for i, turn in enumerate(recent_turns)]
-        if len(self.turns) > 5:
-            logger.info(f"[RISK] 최근 5턴 점수: {' | '.join(turn_details)} (총 {len(self.turns)}턴)")
-        else:
-            logger.info(f"[RISK] 턴별 점수: {' | '.join(turn_details)}")
         raw_total = sum(turn['score'] for turn in self.turns)
         final_score = max(0, min(100, raw_total))
-        logger.info(f"[RISK] 누적 점수: {raw_total} → {final_score}점")
+        logger.info(f"[RISK] 현재 점수: {final_score}점")
         return final_score
     def get_risk_trend(self) -> str:
         """위험도 변화 추세를 분석합니다."""

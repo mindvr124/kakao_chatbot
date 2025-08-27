@@ -256,7 +256,7 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     session=s,
                     conv_id=conv_id_value,
                     user_input=user_text,
-                    prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
+                    prompt_name="온유",  # 콜백에서도 온유 프롬프트 사용
                     user_id=user_id,
                     request_id=request_id
                 )
@@ -311,7 +311,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                 session=session,
                 conv_id=quick_conv_id,
                 user_input=user_text,
-                prompt_name="default",  # 콜백에서는 기본 프롬프트 사용
+                prompt_name="온유",  # 콜백에서도 온유 프롬프트 사용
                 user_id=user_id,
                 request_id=x_request_id
             ),
@@ -692,7 +692,7 @@ async def handle_name_flow(
                     session=session,
                     conv_id=conv.conv_id,
                     user_input=user_text,
-                    prompt_name="default",  # 이름 플로우에서는 기본 프롬프트 사용
+                    prompt_name="온유",  # 이름 플로우에서도 온유 프롬프트 사용
                     user_id=user_id,
                     request_id=x_request_id
                 )
@@ -910,7 +910,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         logger.info(f"===== [위험도 분석 시작] ==============================================")
         logger.info(f"[RISK] 입력: '{user_text_stripped}'")
         
-        # ----- [1단계: RiskHistory 객체 준비] -----
+        # ----- [1단계: RiskHistory 객체 생성] -----
         if user_id not in _RISK_HISTORIES:
             # 데이터베이스에서 기존 위험도 점수 복원 시도
             try:
@@ -938,7 +938,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.info(f"[RISK_DEBUG] 새로운 RiskHistory 객체 생성 (복원 실패): user_id={user_id}")
         
         user_risk_history = _RISK_HISTORIES[user_id]
-        logger.info(f"----- [1단계 완료: RiskHistory 객체 준비] -----")
+        logger.info(f"----- [1단계 완료: RiskHistory 객체 생성] -----")
         
         # ----- [2단계: DB 동기화] -----
         logger.info(f"----- [2단계: DB 동기화 시작] -----")
@@ -1221,16 +1221,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
 
         ENABLE_CALLBACK = True
 
-        # 프롬프트 선택: 사용자가 원하는 프롬프트를 선택할 수 있도록 수정
-        # TODO: 사용자별 프롬프트 설정 기능 추가
-        prompt_name = "default"  # 기본값은 "default"
-        
+        # 프롬프트 선택: DB에서 활성화된 프롬프트 자동 감지
         # 사용자가 특정 프롬프트를 요청했는지 확인 (예: "온유한 톤으로 답변해줘")
         if "온유" in user_text or "따뜻" in user_text or "부드럽" in user_text:
             prompt_name = "온유"
             logger.info(f"[PROMPT] 사용자 요청에 따라 온유 프롬프트 사용: {prompt_name}")
         else:
-            logger.info(f"[PROMPT] 기본 프롬프트 사용: {prompt_name}")
+            # 활성화된 프롬프트를 자동으로 감지하여 사용
+            prompt_name = "auto"  # ai_service에서 활성화된 프롬프트 자동 선택
+            logger.info(f"[PROMPT] 활성화된 프롬프트 자동 감지 사용: {prompt_name}")
 
         if ENABLE_CALLBACK and callback_url and isinstance(callback_url, str) and callback_url.startswith("http"):
             return await _handle_callback_flow(session, user_id, user_text, callback_url, conv_id, x_request_id)

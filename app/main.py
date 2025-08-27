@@ -34,7 +34,7 @@ http_client: httpx.AsyncClient | None = None
 
 from app.database.db import init_db, close_db, get_session
 from app.core.ai_worker import ai_worker
-from app.database.service import create_prompt_template, get_prompt_template_by_name
+# 프롬프트 자동 생성 로직 제거로 인해 불필요한 import 제거
 from app.core.background_tasks import ensure_watcher_started
 
 app = FastAPI(title="Kakao AI Chatbot (FastAPI)")
@@ -53,45 +53,8 @@ async def on_startup():
         await init_db()
         logger.info("DB initialized.")
 
-        # 기본 프롬프트 템플릿 생성 (없을 경우)
-        try:
-            async for session in get_session():
-                # "default" 프롬프트가 없으면 "온유" 프롬프트를 "default"로 사용
-                existing_prompt = await get_prompt_template_by_name(session, "default")
-                if not existing_prompt:
-                    # "온유" 프롬프트가 있는지 확인
-                    onyu_prompt = await get_prompt_template_by_name(session, "온유")
-                    if onyu_prompt:
-                        # "온유" 프롬프트를 "default"로 복사
-                        await create_prompt_template(
-                            session=session,
-                            name="default",
-                            system_prompt=onyu_prompt.system_prompt,
-                            description="온유 프롬프트를 기본으로 사용",
-                            created_by="system"
-                        )
-                        logger.info("Default prompt template created from 온유 prompt")
-                    else:
-                        # "온유"도 없으면 기본 프롬프트 생성
-                        await create_prompt_template(
-                            session=session,
-                            name="default",
-                            system_prompt="""당신은 전문 AI 심리상담가입니다. 
-                            다음 규칙을 따라 답변해주세요:
-
-                            1. 친근하고 공감적인 말로 대화하세요
-                            2. 사용자의 질문에 정확하고 도움이 되는 답변을 제공하세요
-                            3. 모르는 내용은 솔직히 모른다고 하고, 추가 질문을 제안하세요
-                            4. 답변은 간결하면서도 충분한 정보를 포함하세요
-                            5. 한국어로 자연스럽게 대화하세요
-                            6. 지금까지의 대화 내용을 이전 요약을 먼저 참고하여 맥락에 맞게 대화를 이어가세요""",
-                            description="기본 상담사 프롬프트",
-                            created_by="system"
-                        )
-                        logger.info("Default prompt template created with default content")
-                break
-        except Exception as e:
-            logger.warning(f"Failed to create default prompt template: {e}")
+        # 프롬프트 자동 생성 로직 제거 - 기존 프롬프트만 사용
+        logger.info("프롬프트 자동 생성 비활성화 - 기존 프롬프트만 사용")
     except Exception as e:
         logger.error(f"Failed to initialize DB: {e}")
         logger.info("Server will continue without database connection")

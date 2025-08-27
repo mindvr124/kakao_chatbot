@@ -488,7 +488,7 @@ async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskS
                 await session.rollback()
                 raise
         else:
-            logger.info(f"[RISK_DB] AppUser 이미 존재: {user_id}")
+            pass  # AppUser 이미 존재 - 조용히 처리
         
         # RiskState 조회 또는 생성
         risk_state = await session.get(RiskState, user_id)
@@ -505,7 +505,7 @@ async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskS
                 raise
             await session.refresh(risk_state)
         else:
-            logger.info(f"[RISK_DB] RiskState 이미 존재: {user_id}, score={risk_state.score}")
+            pass  # RiskState 이미 존재 - 조용히 처리
         
         return risk_state
         

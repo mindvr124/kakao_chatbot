@@ -56,10 +56,36 @@ class AIService:
             
             if prompt:
                 logger.info(f"[PROMPT_DEBUG] 프롬프트 찾음: name={prompt.name}, version={prompt.version}, is_active={prompt.is_active}")
+                return prompt
             else:
                 logger.warning(f"[PROMPT_DEBUG] 프롬프트를 찾을 수 없음: prompt_name={prompt_name}")
-            
-            return prompt
+                
+                # "default" 또는 "auto"를 요청했는데 찾을 수 없으면, 활성화된 프롬프트 중 하나 사용
+                if prompt_name in ["default", "auto"]:
+                    logger.info(f"[PROMPT_DEBUG] {prompt_name} 프롬프트가 없어서 활성화된 프롬프트 중 하나를 찾습니다")
+                    fallback_stmt = (
+                        select(PromptTemplate)
+                        .where(PromptTemplate.is_active == True)
+                        .order_by(PromptTemplate.version.desc())
+                        .limit(1)
+                    )
+                    
+                    try:
+                        fallback_result = await session.execute(fallback_stmt)
+                        fallback_prompt = fallback_result.scalar_one_or_none()
+                        
+                        if fallback_prompt:
+                            logger.info(f"[PROMPT_DEBUG] 활성화된 프롬프트 자동 선택: name={fallback_prompt.name}, version={fallback_prompt.version}")
+                            return fallback_prompt
+                        else:
+                            logger.warning(f"[PROMPT_DEBUG] 활성화된 프롬프트가 하나도 없습니다")
+                            return None
+                            
+                    except Exception as fallback_error:
+                        logger.error(f"[PROMPT_DEBUG] 활성화된 프롬프트 검색 실패: {fallback_error}")
+                        return None
+                
+                return None
             
         except Exception as e:
             logger.error(f"[PROMPT_DEBUG] get_active_prompt 실행 실패: {e}")
@@ -180,13 +206,11 @@ class AIService:
         prompt_template = await self.get_active_prompt(session, prompt_name)
         
         if prompt_template:
-            logger.info(f"[PROMPT_DEBUG] 프롬프트 템플릿 로딩 성공: name={prompt_template.name}, version={prompt_template.version}, is_active={prompt_template.is_active}")
+            logger.info(f"====[상담가 : {prompt_template.name}]====")
             system_prompt = prompt_template.system_prompt
         else:
             logger.warning(f"[PROMPT_DEBUG] 프롬프트 템플릿 로딩 실패: prompt_name={prompt_name}, 기본 프롬프트 사용")
             system_prompt = self.default_system_prompt
-        
-        logger.info(f"[PROMPT_DEBUG] 최종 시스템 프롬프트 길이: {len(system_prompt)} 문자")
         messages.append({"role": "system", "content": system_prompt})
 
         # 맥락 내용 지시를 명시적으로 추가
