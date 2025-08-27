@@ -83,20 +83,14 @@ class RiskHistory:
         
         logger.info(f"[RISK_HISTORY] 턴별 점수: {' | '.join(turn_details)}")
         
-        # 긍정 발화 횟수만큼 차감 (각 턴당 -2점)
-        positive_count = sum(1 for turn in self.turns if any(ev['keyword'] == '긍정_발화' for ev in turn['evidence']))
-        positive_deduction = positive_count * 2
-        
-        # 순수 누적 점수 계산
+        # 각 턴의 최종 점수는 이미 긍정 발화 감점이 적용된 상태
+        # 따라서 단순히 턴별 점수를 합산하면 됨
         raw_total = sum(turn['score'] for turn in self.turns)
         
-        # 긍정 발화 차감 적용
-        total_score = raw_total - positive_deduction
-        
         # 최종 점수는 0점 이하로 가지 않도록 보장
-        final_score = max(0, min(100, total_score))
+        final_score = max(0, min(100, raw_total))
         
-        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={raw_total}, positive_deduction={positive_deduction}, total_score={total_score}, final_score={final_score}, turns_count={len(self.turns)}")
+        logger.info(f"[RISK_HISTORY] 누적 점수 계산 완료: raw_total={raw_total}, final_score={final_score}, turns_count={len(self.turns)}")
         return final_score
     
     def get_risk_trend(self) -> str:
