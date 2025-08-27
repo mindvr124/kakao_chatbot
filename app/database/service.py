@@ -416,6 +416,21 @@ async def get_latest_ai_response(session: AsyncSession, conv_id: UUID) -> str | 
         logger.warning(f"\n[경고] 최근 AI 응답 조회 실패: {e}")
         return None
 
+async def get_risk_state(session: AsyncSession, user_id: str) -> Optional[RiskState]:
+    """사용자의 위험도 상태를 조회합니다. 없으면 None을 반환합니다."""
+    try:        
+        risk_state = await session.get(RiskState, user_id)
+        if risk_state:
+            logger.info(f"[RISK_DB] RiskState 조회 완료: user_id={user_id}, score={risk_state.score}")
+        else:
+            logger.info(f"[RISK_DB] RiskState가 존재하지 않음: user_id={user_id}")
+        
+        return risk_state
+        
+    except Exception as e:
+        logger.error(f"[RISK_DB] get_risk_state 실패: user_id={user_id}, error={e}")
+        return None
+
 async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskState:
     """사용자의 위험도 상태를 조회하거나 생성합니다."""
     try:
