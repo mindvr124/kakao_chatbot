@@ -573,7 +573,7 @@ def check_name_with_josa(name: str) -> tuple[bool, str]:
     if last_char == '이':
         # '이'로 끝나는 이름의 경우 조사 질문
         base_name = name[:-1]  # '이' 제거
-        question = f"'{base_name}'야? 아니면 '{name}'야?"
+        question = f"'{base_name}'(이)야? 아니면 '{name}'야?"
         return True, question
     
     return False, ""
@@ -650,7 +650,7 @@ class JosaDisambCache:
     @classmethod
     def set_pending(cls, user_id: str):
         cls._store[user_id] = time.time() + cls.TTL_SECONDS
-        logger.info(f"[대기] 조사 모호성 확인 대기: {user_id}")
+        logger.info(f"[대기] '이' 모호성 확인 대기: {user_id}")
 
     @classmethod
     def is_pending(cls, user_id: str) -> bool:
@@ -666,8 +666,7 @@ class JosaDisambCache:
     def clear(cls, user_id: str):
         if user_id in cls._store:
             cls._store.pop(user_id, None)
-            logger.info(f"[해제] 조사 모호성 대기 해제: {user_id}")
-
+            logger.info(f"[해제] '이' 모호성 대기 해제: {user_id}")
 
 # ----------------------------------------------------------------------
 # 메인 플로우 (불필요 로직 제거 + '이' 모호성 처리 추가)
@@ -679,6 +678,26 @@ async def handle_name_flow(
     x_request_id: str,
     conv_id: Optional[str] = None
 ) -> Optional[JSONResponse]:
+
+    # '이' 모호성 질문에 대한 다음 턴 응답을 최우선 처리
+    if JosaDisambCache.is_pending(user_id):
+        # 사용자가 어떤 형태로 답하든(민정, 민정이, 민정이야...) 정리해서 최종 저장
+        final_name = strip_suffixes(clean_name(user_text))
+
+        if not is_valid_name(final_name) or contains_profanity(final_name) or is_common_non_name(final_name) or is_bot_name(final_name):
+            # 대기 유지 + 안내 (모호성 캐시/이름대기 캐시는 유지해서 한번 더 답을 받게 함)
+            return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
+
+        try:
+            await save_user_name(session, user_id, final_name)
+            JosaDisambCache.clear(user_id)
+            PendingNameCache.clear(user_id)
+            return kakao_text(f"좋아! 이제부터 '{final_name}'(이)라고 부를게~")
+        except Exception as e:
+            logger.exception(f"[모호성-저장오류] {e}")
+            # 실패 시 모호성 대기만 해제(중복 오류 방지). 이름대기는 유지해도 됨.
+            JosaDisambCache.clear(user_id)
+            return kakao_text("앗, 저장에 문제가 있었어. 한 번만 더 알려줄래?")
 
     try:
         prompt_name = await get_active_prompt_name(session)
@@ -714,6 +733,10 @@ async def handle_name_flow(
                     return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
 
                 cand = extract_simple_name(user_text)
+
+                if not cand:
+                    return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
+
                 if cand and is_valid_name(cand):
                     # '이' 모호성 확인
                     needs_josa_question, josa_question = check_name_with_josa(cand)
@@ -1254,6 +1277,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     return kakao_text(response_text)
                 
                 cand = extract_simple_name(user_text_stripped)
+                if not cand:
+                    return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
+                    
                 if cand and is_valid_name(cand):
                     # 조사 질문 확인
                     needs_josa_question, josa_question = check_name_with_josa(cand)
