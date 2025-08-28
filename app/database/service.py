@@ -13,19 +13,8 @@ logger = logging.getLogger(__name__)
 
 async def get_active_prompt_name(session: AsyncSession) -> str:
     """현재 활성화된 프롬프트 템플릿의 이름을 반환합니다."""
-    try:
-        stmt = (
-            select(PromptTemplate.name)
-            .where(PromptTemplate.is_active == True)
-            .order_by(PromptTemplate.version.desc())
-            .limit(1)
-        )
-        result = await session.execute(stmt)
-        prompt_name = result.scalar_one_or_none()
-        return prompt_name if prompt_name else "온유"  # 기본값
-    except Exception as e:
-        logger.warning(f"[PROMPT] 활성 프롬프트 이름 조회 실패: {e}")
-        return "온유"  # 기본값
+    # 프롬프트 템플릿 자동생성 방지 - 고정값만 반환
+    return "온유"
 
 async def get_user_name(session: AsyncSession, user_id: str) -> str | None:
     """사용자 이름을 조회합니다. 없으면 None을 반환합니다."""

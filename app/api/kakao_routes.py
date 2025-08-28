@@ -1438,7 +1438,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if user_text_stripped == "/이름":
             PendingNameCache.set_waiting(user_id)
             prompt_name = await get_active_prompt_name(session)
-            return kakao_text(f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n💡 팁: 자연스럽게 '내 이름은 민수야'라고 말해도 알아들어요!")
+            return kakao_text(f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n💡 자연스럽게 '내 이름은 민수야'라고 말해도 알아들을 수 있어!")
         
         # 이름 대기 상태 처리
         if PendingNameCache.is_waiting(user_id):
