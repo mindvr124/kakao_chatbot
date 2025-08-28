@@ -681,13 +681,9 @@ async def handle_name_flow(
 
     # '이' 모호성 질문에 대한 다음 턴 응답을 최우선 처리
     if JosaDisambCache.is_pending(user_id):
-        # 사용자가 어떤 형태로 답하든(민정, 민정이, 민정이야...) 정리해서 최종 저장
         final_name = strip_suffixes(clean_name(user_text))
-
         if not is_valid_name(final_name) or contains_profanity(final_name) or is_common_non_name(final_name) or is_bot_name(final_name):
-            # 대기 유지 + 안내 (모호성 캐시/이름대기 캐시는 유지해서 한번 더 답을 받게 함)
             return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
-
         try:
             await save_user_name(session, user_id, final_name)
             JosaDisambCache.clear(user_id)
@@ -695,7 +691,6 @@ async def handle_name_flow(
             return kakao_text(f"좋아! 이제부터 '{final_name}'(이)라고 부를게~")
         except Exception as e:
             logger.exception(f"[모호성-저장오류] {e}")
-            # 실패 시 모호성 대기만 해제(중복 오류 방지). 이름대기는 유지해도 됨.
             JosaDisambCache.clear(user_id)
             return kakao_text("앗, 저장에 문제가 있었어. 한 번만 더 알려줄래?")
 
@@ -737,28 +732,39 @@ async def handle_name_flow(
                 if not cand:
                     return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
 
-                if cand and is_valid_name(cand):
-                    # '이' 모호성 확인
-                    needs_josa_question, josa_question = check_name_with_josa(cand)
-                    if needs_josa_question:
-                        PendingNameCache.set_waiting(user_id)
-                        JosaDisambCache.set_pending(user_id)
-                        return kakao_text(josa_question)
+                # cand 기준으로도 한 번 더 가드(원하는 경우 유지)
+                if contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand):
+                    return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
 
-                    try:
-                        await save_user_name(session, user_id, cand)
-                        PendingNameCache.clear(user_id)
-                        try:
-                            await save_log_message(session, "name_saved", f"Name saved: {cand}", str(user_id), conv_id, {"source": "name_flow", "name": cand, "mode": "first_chat", "x_request_id": x_request_id})
-                        except Exception:
-                            pass
-                        return kakao_text(f"반가워 {cand}! 앞으로 {cand}(이)라고 부를게🐥")
-                    except Exception as e:
-                        logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
-                        PendingNameCache.clear(user_id)
-                        return kakao_text("앗, 저장 중 문제가 있었어. 다시 알려줄래?")
-                else:
+                if not is_valid_name(cand):
                     return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
+
+                # '이' 모호성 확인
+                needs_josa_question, josa_question = check_name_with_josa(cand)
+                if needs_josa_question:
+                    PendingNameCache.set_waiting(user_id)
+                    JosaDisambCache.set_pending(user_id)
+                    return kakao_text(josa_question)
+
+                try:
+                    await save_user_name(session, user_id, cand)
+                    PendingNameCache.clear(user_id)
+                    JosaDisambCache.clear(user_id)   # ← 추가: 방어적 클리어
+                    try:
+                        await save_log_message(
+                            session, "name_saved", f"Name saved: {cand}",
+                            str(user_id), conv_id,
+                            {"source": "name_flow", "name": cand, "mode": "first_chat", "x_request_id": x_request_id}
+                        )
+                    except Exception:
+                        pass
+                    return kakao_text(f"반가워 {cand}! 앞으로 {cand}(이)라고 부를게🐥")
+                except Exception as e:
+                    logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
+                    PendingNameCache.clear(user_id)
+                    # 모호성 캐시도 정리(중복 오류 방지)
+                    JosaDisambCache.clear(user_id)
+                    return kakao_text("앗, 저장 중 문제가 있었어. 다시 알려줄래?")
 
             elif any(g in user_text.lower() for g in _GREETINGS):
                 PendingNameCache.set_waiting(user_id)
@@ -774,6 +780,7 @@ async def handle_name_flow(
                 except Exception:
                     pass
                 return kakao_text(f"안녕! 처음 보네~ 나는 {prompt_name}야🐥\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줄게!")
+
 
         # --- 2) 이름 있는 사용자: 세션 확보(그 외 자동 추출 전부 제거) ------
         try:
