@@ -1308,7 +1308,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 f"💡 자연스럽게 '내 이름은 민수야'라고 말해도 알아들을 수 있어!"
             )
 
-                # 이름 대기 상태 처리
+        # 이름 대기 상태 처리
         if PendingNameCache.is_waiting(user_id):
             logger.info(f"[대기] 이름 대기 상태 입력 처리: '{user_text_stripped}'")
 
@@ -1328,11 +1328,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             if not is_valid_name(cand):
                 return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
 
-            # '민정이' 같은 '이' 모호성 처리: 질문만 던지고 다음 턴에서 확정
+            # ✅ '민정이' 같은 '이' 모호성 질문
             needs_josa_question, josa_question = check_name_with_josa(cand)
             if needs_josa_question:
                 PendingNameCache.set_waiting(user_id)   # 대기 유지
-                JosaDisambCache.set_pending(user_id)    # 다음 턴을 모호성 답변으로 처리
+                JosaDisambCache.set_pending(user_id)    # 다음 턴에서 확정 처리
                 return kakao_text(josa_question)
 
             # 최종 저장
@@ -1346,6 +1346,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 PendingNameCache.clear(user_id)
                 JosaDisambCache.clear(user_id)
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
+
 
         
         # '/이름 xxx' 즉시 저장
