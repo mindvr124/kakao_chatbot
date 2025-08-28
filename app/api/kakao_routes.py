@@ -486,26 +486,34 @@ def is_valid_name(s: str) -> bool:
 # ======================================================================
 # 이름 후보 선택기 & 정정 트리거
 # ======================================================================
-# LLM 안내문 트리거(정정 창구 오픈 감지)
 RE_DISPUTE_TRIGGER = re.compile(r"내가\s*기억하는\s*네\s*이름은", re.IGNORECASE)
 
-# 교정(정정) 패턴: "그거 아니고 민지", "내 이름 민수", "민재라고 불러"
 CORRECTION_PATTERNS = [
     re.compile(r'(?:그거\s*아니고|아니,\s*|아니야|틀렸고|정정)\s*([가-힣]{2,4})'),
     re.compile(r'(?:내\s*이름(?:은)?|이름은)\s*([가-힣]{2,4})'),
     re.compile(r'([가-힣]{2,4})\s*라고\s*(?:해|불러)(?:줘|주세요)?')
 ]
 
-# 명시 패턴(그룹명 사용): 1) "~라고 불러", 2) "내 이름 은 ~", 3) "나는 ~야"
 EXPLICIT_PATTERNS = [
     re.compile(r'(?P<name>[가-힣]{2,4})\s*라고\s*(불러(?:줘|주세요)?|해(?:요|줘)?|부르세요)'),
-    # 공백 유무 모두 허용: "내 이름", "내이름"
     re.compile(r'(?:^|[\s,])(내|제)\s*이름(?:은)?\s*(?P<name>[가-힣]{2,4})\s*(?:이야|야|입니다|예요|에요)?'),
-    # '나' 단독도 허용
     re.compile(r'(?:^|[\s,])(난|나는|전|저는|나)\s+(?P<name>[가-힣]{2,4})\s*(?:이야|야|라고\s*해(?:요)?)?'),
 ]
 
-
+def strip_suffixes(s: str) -> str:
+    """
+    이름에서 어미/조사를 제거합니다.
+    예: "민수야" → "민수", "지현이" → "지현"
+    """
+    if not s:
+        return ""
+    suffix_patterns = [
+        r'(야|이야|입니다|이에요|예요|에요|임|잖아|거든요?|라니까|라니|라고요|라며|라네|래요|맞아)$'
+    ]
+    result = s
+    for pattern in suffix_patterns:
+        result = re.sub(pattern, '', result)
+    return result.strip()
 
 def extract_simple_name(text: str) -> Optional[str]:
     """
@@ -522,7 +530,7 @@ def extract_simple_name(text: str) -> Optional[str]:
             if is_valid_name(cand) and not contains_profanity(cand) and not is_common_non_name(cand):
                 return cand
 
-    # B) 명시 패턴 (공백 유무/존댓말 포함)
+    # B) 명시 패턴
     for pat in EXPLICIT_PATTERNS:
         m = pat.search(t)
         if m:
@@ -531,7 +539,7 @@ def extract_simple_name(text: str) -> Optional[str]:
             if is_valid_name(cand) and not contains_profanity(cand) and not is_common_non_name(cand):
                 return cand
 
-    # ★ 단독 이름 허용 (대기/슬래시 흐름에서만 호출됨)
+    # C) 단독 이름
     m = re.fullmatch(r'\s*([가-힣]{2,4})\s*', t)
     if m:
         cand = strip_suffixes(clean_name(m.group(1)))
@@ -540,57 +548,30 @@ def extract_simple_name(text: str) -> Optional[str]:
 
     return None
 
-def strip_suffixes(s: str) -> str:
-    """
-    이름에서 어미/조사를 제거합니다.
-    예: "민수야" → "민수", "지현이" → "지현"
-    """
-    if not s:
-        return ""
-    
-    # 어미/조사 패턴 제거
-    suffix_patterns = [
-        r'(야|이야|입니다|이에요|예요|에요|임|잖아|거든요?|라니까|라니|라고요|라며|라네|래요|맞아)$'
-    ]
-    
-    result = s
-    for pattern in suffix_patterns:
-        result = re.sub(pattern, '', result)
-    
-    return result.strip()
-
 def check_name_with_josa(name: str) -> tuple[bool, str]:
     """
-    이름의 마지막 글자에 '이'가 들어가는지 확인하고 조사 질문을 생성합니다.
-    
-    Returns:
-        tuple[bool, str]: (조사 질문이 필요한지, 질문 메시지)
+    이름 마지막 글자가 '이'인지 확인하고 조사 질문을 생성.
     """
     if not name or len(name) < 2:
         return False, ""
-    
     last_char = name[-1]
     if last_char == '이':
-        # '이'로 끝나는 이름의 경우 조사 질문
         base_name = name[:-1]  # '이' 제거
         question = f"'{base_name}'(이)야? 아니면 '{name}'야?"
         return True, question
-    
     return False, ""
 
 # ----------------------------------------------------------------------
 # 창구 상태(대기/정정)
 # ----------------------------------------------------------------------
-
 class PendingNameCache:
-    """간단 in-memory 캐시(운영은 Redis/DB 권장)"""
     _store: dict[str, float] = {}
     TTL_SECONDS = 300  # 5분
 
     @classmethod
     def set_waiting(cls, user_id: str):
         cls._store[user_id] = time.time() + cls.TTL_SECONDS
-        logger.info(f"[대기] 이름 대기 상태 설정: {user_id}")
+        # 로그 생략/유지 선택
 
     @classmethod
     def is_waiting(cls, user_id: str) -> bool:
@@ -607,42 +588,8 @@ class PendingNameCache:
 
     @classmethod
     def clear(cls, user_id: str):
-        was_waiting = user_id in cls._store
         cls._store.pop(user_id, None)
-        if was_waiting:
-            logger.info(f"[해제] 이름 대기 상태 해제: {user_id}")
 
-
-async def save_user_name(session: AsyncSession, user_id: str, name: str):
-    """appuser.user_name 저장/갱신 (INSERT 또는 UPDATE) — 프로젝트의 upsert_user로 구현"""
-    logger.info(f"[저장] 이름 저장: {user_id} -> {name}")
-    user = await upsert_user(session, user_id, name)
-    operation = 'INSERT' if not user.user_name else 'UPDATE'
-    logger.info(f"[완료] 이름 저장 완료: {user_id} -> {name} ({operation})")
-    try:
-        await save_log_message(
-            session=session,
-            level="INFO",
-            message=f"사용자 이름이 '{name}'으로 변경되었습니다.",
-            user_id=user_id,
-            source="name_update"
-        )
-    except Exception as e:
-        logger.error(f"[오류] 이름 변경 로그 저장 중 오류: {e}")
-
-def kakao_text(text: str) -> JSONResponse:
-    return JSONResponse(
-        content={
-            "version": "2.0",
-            "template": {"outputs": [{"simpleText": {"text": text}}]}
-        },
-        media_type="application/json; charset=utf-8"
-    )
-
-# 사용자별 위험도 히스토리 (미사용이면 제거 가능)
-_RISK_HISTORIES: dict[str, "RiskHistory"] = {}
-
-# --- 모호한 '이' 처리용 캐시 ---------------------------------------------
 class JosaDisambCache:
     _store: dict[str, float] = {}
     TTL_SECONDS = 180  # 3분
@@ -650,7 +597,6 @@ class JosaDisambCache:
     @classmethod
     def set_pending(cls, user_id: str):
         cls._store[user_id] = time.time() + cls.TTL_SECONDS
-        logger.info(f"[대기] '이' 모호성 확인 대기: {user_id}")
 
     @classmethod
     def is_pending(cls, user_id: str) -> bool:
@@ -664,12 +610,30 @@ class JosaDisambCache:
 
     @classmethod
     def clear(cls, user_id: str):
-        if user_id in cls._store:
-            cls._store.pop(user_id, None)
-            logger.info(f"[해제] '이' 모호성 대기 해제: {user_id}")
+        cls._store.pop(user_id, None)
+
+async def save_user_name(session: AsyncSession, user_id: str, name: str):
+    """appuser.user_name 저장/갱신 (INSERT 또는 UPDATE) — 프로젝트의 upsert_user로 구현"""
+    user = await upsert_user(session, user_id, name)
+    try:
+        await save_log_message(
+            session=session,
+            level="INFO",
+            message=f"사용자 이름이 '{name}'으로 변경되었습니다.",
+            user_id=user_id,
+            source="name_update"
+        )
+    except Exception:
+        pass
+
+def kakao_text(text: str) -> JSONResponse:
+    return JSONResponse(
+        content={"version": "2.0", "template": {"outputs": [{"simpleText": {"text": text}}]}},
+        media_type="application/json; charset=utf-8",
+    )
 
 # ----------------------------------------------------------------------
-# 메인 플로우 (불필요 로직 제거 + '이' 모호성 처리 추가)
+# 메인 플로우 (불필요 로직 제거 + '이' 모호성 처리 일원화)
 # ----------------------------------------------------------------------
 async def handle_name_flow(
     session: AsyncSession,
@@ -679,80 +643,59 @@ async def handle_name_flow(
     conv_id: Optional[str] = None
 ) -> Optional[JSONResponse]:
 
-    # '이' 모호성 질문에 대한 다음 턴 응답을 최우선 처리
+    # 0) '이' 모호성 질문에 대한 다음 턴 응답 — 최우선, 단 한 곳에서만 처리
     if JosaDisambCache.is_pending(user_id):
-        base = strip_suffixes(clean_name(user_text))
-        if not base or contains_profanity(base) or is_common_non_name(base) or is_bot_name(base) or not is_valid_name(base):
+        cand = strip_suffixes(clean_name(user_text))  # ← cand 즉시 대입 (FIX)
+        # 조사 응답 단계에서는 재-모호성 질문/추출 없이 저장만 수행
+        if not cand or contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand) or not is_valid_name(cand):
             PendingNameCache.set_waiting(user_id)  # 계속 대기 유지
             return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
-
         try:
-            await save_user_name(session, user_id, base)
+            await save_user_name(session, user_id, cand)
             PendingNameCache.clear(user_id)
             JosaDisambCache.clear(user_id)
-            return kakao_text(f"반가워 {base}! 앞으로 {base}(이)라고 부를게🐥")
+            return kakao_text(f"좋아! 앞으로 {cand}(이)라고 부를게🐥")
         except Exception:
-            PendingNameCache.set_waiting(user_id)
+            # 저장 실패시 모호성 상태는 종료, 대기만 유지
             JosaDisambCache.clear(user_id)
+            PendingNameCache.set_waiting(user_id)
             return kakao_text("앗, 저장 중 문제가 있었어. 다시 알려줄래?")
-
 
     try:
         prompt_name = await get_active_prompt_name(session)
-        logger.info(f"[PROMPT] 활성 프롬프트 이름: {prompt_name}")
 
         user = await session.get(AppUser, user_id)
         user_name = user.user_name if user else None
         is_waiting = PendingNameCache.is_waiting(user_id)
-        logger.info(f"[상태] user={user_id} | 이름={user_name} | 대기중={is_waiting}")
-        logger.info(f"[입력] '{user_text}'")
 
-        # --- A) '이' 모호성 질문 직후 처리 ---------------------------------
-        if JosaDisambCache.is_pending(user_id):
-            cand = strip_suffixes(clean_name(user_text))
-            if not is_valid_name(cand) or contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand):
-                return kakao_text("이름처럼 들리지 않아. 예) 민수, 지현")
-            try:
-                await save_user_name(session, user_id, cand)
-                JosaDisambCache.clear(user_id)
-                PendingNameCache.clear(user_id)
-                return kakao_text(f"좋아! 이제부터 '{cand}'(이)라고 부를게~")
-            except Exception as e:
-                logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
-                JosaDisambCache.clear(user_id)
-                PendingNameCache.clear(user_id)
-                return kakao_text("앗, 저장 중 문제가 생겼어. 다시 한 번만 알려줄래?")
-
-        # --- 1) 이름 없는 사용자 -------------------------------------------
-        if user is None or user.user_name is None:
+        # 1) 이름 없는 사용자 흐름
+        if user is None or user_name is None:
             if is_waiting:
+                # a) 대기 상태에서 입력 받은 이름 처리
                 raw = clean_name(user_text)
                 if contains_profanity(raw) or is_common_non_name(raw) or is_bot_name(raw):
                     return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
 
-                cand = extract_simple_name(user_text)
-
+                cand = extract_simple_name(user_text)  # ← cand 정의 (FIX)
                 if not cand:
                     return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
-
-                # cand 기준으로도 한 번 더 가드(원하는 경우 유지)
                 if contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand):
                     return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
-
                 if not is_valid_name(cand):
                     return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
 
-                # '이' 모호성 확인
+                # b) '이' 모호성 확인 (cand가 정의된 이후만 호출) (FIX)
                 needs_josa_question, josa_question = check_name_with_josa(cand)
                 if needs_josa_question:
                     PendingNameCache.set_waiting(user_id)
                     JosaDisambCache.set_pending(user_id)
                     return kakao_text(josa_question)
 
+                # c) 저장
                 try:
                     await save_user_name(session, user_id, cand)
                     PendingNameCache.clear(user_id)
-                    JosaDisambCache.clear(user_id)   # ← 추가: 방어적 클리어
+                    JosaDisambCache.clear(user_id)  # 방어적 클리어
                     try:
                         await save_log_message(
                             session, "name_saved", f"Name saved: {cand}",
@@ -762,10 +705,8 @@ async def handle_name_flow(
                     except Exception:
                         pass
                     return kakao_text(f"반가워 {cand}! 앞으로 {cand}(이)라고 부를게🐥")
-                except Exception as e:
-                    logger.bind(x_request_id=x_request_id).exception(f"[오류] 이름 저장 실패: {e}")
+                except Exception:
                     PendingNameCache.clear(user_id)
-                    # 모호성 캐시도 정리(중복 오류 방지)
                     JosaDisambCache.clear(user_id)
                     return kakao_text("앗, 저장 중 문제가 있었어. 다시 알려줄래?")
 
@@ -784,15 +725,13 @@ async def handle_name_flow(
                     pass
                 return kakao_text(f"안녕! 처음 보네~ 나는 {prompt_name}야🐥\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줄게!")
 
-
-        # --- 2) 이름 있는 사용자: 세션 확보(그 외 자동 추출 전부 제거) ------
+        # 2) 이름 있는 사용자
         try:
             conv = await get_or_create_conversation(session, user_id)
-        except Exception as e:
-            logger.warning(f"[경고] 대화 세션 생성 실패: {e}")
+        except Exception:
             conv = None
 
-        # --- 2-1) '/이름' 명령: 대기 진입 -----------------------------------
+        # 2-1) '/이름' 명령: 대기 진입
         if user_text == "/이름":
             PendingNameCache.set_waiting(user_id)
             try:
@@ -801,22 +740,21 @@ async def handle_name_flow(
                 pass
             return kakao_text(f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n💡 팁: 자연스럽게 '내 이름은 민수야'라고 말해도 알아들어요!")
 
-       # --- 이미 대기 상태: 일반 입력 처리 ---
+        # 2-1.5) 이미 대기 상태: 일반 입력 처리
         if PendingNameCache.is_waiting(user_id):
             if user_text in ("취소", "그만", "아냐", "아니야", "됐어", "아니"):
                 PendingNameCache.clear(user_id)
                 return kakao_text("좋아, 다음에 다시 알려줘!")
 
-            cand = extract_simple_name(user_text)
+            cand = extract_simple_name(user_text)  # ← cand 정의 (FIX)
             if not cand:
                 return kakao_text("그건 이름처럼 들리지 않아.\n예) 민수, 지현")
-
             if contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand):
                 return kakao_text("그 이름은 사용할 수 없어.\n예) 민수, Yeonwoo")
             if not is_valid_name(cand):
                 return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
 
-            # ★ 여기서만 모호성 질문
+            # ★ 여기서만 모호성 질문 (cand 이후) (FIX)
             needs_josa_question, josa_question = check_name_with_josa(cand)
             if needs_josa_question:
                 PendingNameCache.set_waiting(user_id)
@@ -831,19 +769,16 @@ async def handle_name_flow(
                 PendingNameCache.clear(user_id)
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
 
-
-        # --- 2-2) '/이름 xxx' 즉시 저장 -------------------------------------
+        # 2-2) '/이름 xxx' 즉시 저장
         if user_text.startswith("/이름 "):
             raw = user_text[len("/이름 "):]
-            cand = clean_name(raw)
-
+            cand = clean_name(raw)  # 필요 시 strip_suffixes(cand) 고려 가능
             if contains_profanity(cand) or is_common_non_name(cand) or is_bot_name(cand):
                 return kakao_text("그 이름은 사용할 수 없어.\n한글/영문 1~20자로 예쁜 이름을 알려줘!\n예) 민수, Yeonwoo")
             if not is_valid_name(cand):
                 return kakao_text("이름 형식은 한글/영문 1~20자야.\n예) 민수, Yeonwoo")
 
-            # '이' 모호성 확인
-            needs_josa_question, josa_question = check_name_with_josa(cand)
+            needs_josa_question, josa_question = check_name_with_josa(cand)  # cand 정의 이후 (FIX)
             if needs_josa_question:
                 PendingNameCache.set_waiting(user_id)
                 JosaDisambCache.set_pending(user_id)
@@ -856,15 +791,14 @@ async def handle_name_flow(
                 except Exception:
                     pass
                 return kakao_text(f"예쁜 이름이다! 앞으로는 {cand}(이)라고 불러줄게~")
-            except Exception as name_err:
-                logger.bind(x_request_id=x_request_id).exception(f"save_user_name failed: {name_err}")
+            except Exception:
                 return kakao_text("앗, 이름을 저장하는 중에 문제가 생겼나봐. 잠시 후 다시 시도해줘!")
 
         # 이름 관련 처리 없음 → 상위 로직에 위임
         return None
 
-    except Exception as e:
-        logger.bind(x_request_id=x_request_id).exception(f"Failed to handle name flow: {e}")
+    except Exception:
+        # 상위에서 공용 예외 핸들링
         return None
 
 
