@@ -632,6 +632,8 @@ def kakao_text(text: str) -> JSONResponse:
         media_type="application/json; charset=utf-8",
     )
 
+_RISK_HISTORIES: dict[str, "RiskHistory"] = {}
+
 # ----------------------------------------------------------------------
 # 메인 플로우 (불필요 로직 제거 + '이' 모호성 처리 일원화)
 # ----------------------------------------------------------------------
