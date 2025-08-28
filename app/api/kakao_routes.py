@@ -46,6 +46,7 @@ from app.database.service import (
     get_or_create_conversation,
     save_message,
     get_check_question_turn,
+    decrement_check_question_turn,
 )
 from app.risk_mvp import (
     calculate_risk_score,
@@ -961,10 +962,17 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # ----- [3단계: 위험도 분석] -----
         logger.info(f"----- [3단계: 위험도 분석 시작] -----")
-        turn_analysis = user_risk_history.add_turn(user_text_stripped)
-        risk_score = turn_analysis['score']
-        flags = turn_analysis['flags']
-        cumulative_score = user_risk_history.get_cumulative_score()
+        if user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0:
+            logger.info(f"[RISK] 체크 질문 쿨다운 중: {user_risk_history.check_question_turn_count}턴 남음. 점수 누적 건너뜀")
+            turn_analysis = {'score': 0, 'flags': {}, 'evidence': []}
+            risk_score = 0
+            flags = {}
+            cumulative_score = 0
+        else:
+            turn_analysis = user_risk_history.add_turn(user_text_stripped)
+            risk_score = turn_analysis['score']
+            flags = turn_analysis['flags']
+            cumulative_score = user_risk_history.get_cumulative_score()
         logger.info(f"----- [3단계 완료: 위험도 분석] -----")
         
         # ----- [4단계: 긴급 위험도 체크] -----
@@ -1019,12 +1027,24 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # ----- [5단계: 데이터베이스 저장] -----
         logger.info(f"----- [5단계: 데이터베이스 저장 시작] -----")
         try:
-            await update_risk_score(session, user_id, cumulative_score)
-            logger.info(f"[RISK] DB 저장 완료: {cumulative_score}점")
+            if not (user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0):
+                await update_risk_score(session, user_id, cumulative_score)
+                logger.info(f"[RISK] DB 저장 완료: {cumulative_score}점")
+            else:
+                logger.info(f"[RISK] 체크 질문 쿨다운 중이므로 DB 점수 업데이트 생략")
         except Exception as e:
             logger.error(f"[RISK] DB 저장 실패: {e}")
         
         logger.info(f"----- [5단계 완료: 데이터베이스 저장] -----")
+
+        # ----- [5.5단계: 체크 질문 턴 카운트 감소] -----
+        try:
+            if user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0:
+                await decrement_check_question_turn(session, user_id)
+                user_risk_history.check_question_turn_count = max(0, user_risk_history.check_question_turn_count - 1)
+                logger.info(f"[CHECK] 쿨다운 카운트 감소: 남은 턴 {user_risk_history.check_question_turn_count}")
+        except Exception as e:
+            logger.warning(f"[CHECK] 쿨다운 카운트 감소 실패: {e}")
         
         # ----- [6단계: 체크 질문 처리] -----
         logger.info(f"----- [6단계: 체크 질문 처리 시작] -----")
