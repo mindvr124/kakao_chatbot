@@ -1060,11 +1060,11 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         logger.info(f"----- [6단계: 체크 질문 처리 시작] -----")
         check_score = None
         
-        # 체크 질문이 발송된 직후에만 응답 파싱 시도
-        if (user_risk_history.check_question_turn_count == 20 and 
+        # 체크 질문이 발송된 직후에만 응답 파싱 시도 (20턴 또는 19턴일 때)
+        if (user_risk_history.check_question_turn_count >= 19 and 
             user_risk_history.last_check_score is None):
             check_score = parse_check_response(user_text_stripped)
-            logger.info(f"[CHECK] 응답 파싱: {check_score}점")
+            logger.info(f"[CHECK] 응답 파싱: {check_score}점 (턴 카운트: {user_risk_history.check_question_turn_count})")
         
         if check_score is not None:
             logger.info(f"[CHECK] 체크 질문 응답 감지: {check_score}점")
