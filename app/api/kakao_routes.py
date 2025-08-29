@@ -1039,7 +1039,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         try:
             if user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0:
                 await decrement_check_question_turn(session, user_id)
-                user_risk_history.check_question_turn_count = max(0, user_risk_history.check_question_turn_count - 1)
+                # DB에서 감소된 값을 다시 가져와서 동기화
+                db_turn = await get_check_question_turn(session, user_id)
+                user_risk_history.check_question_turn_count = db_turn
                 logger.info(f"[CHECK] 쿨다운 카운트 감소: 남은 턴 {user_risk_history.check_question_turn_count}")
         except Exception as e:
             logger.warning(f"[CHECK] 쿨다운 카운트 감소 실패: {e}")
