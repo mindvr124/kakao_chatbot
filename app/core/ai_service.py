@@ -370,20 +370,15 @@ class AIService:
                     
                     # 10턴이 누적되었는지 확인하고 요약 실행
                     if new_count >= MAX_TURNS:
-                        # 현재 요약 존재 여부 확인
-                        current_us = await get_or_init_user_summary(session, user_id)
-                        current_has_summary = bool((current_us.summary or "").strip())
-                        
-                        if not current_has_summary:
-                            logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
-                            try:
-                                from app.core.summary import maybe_rollup_user_summary
-                                await maybe_rollup_user_summary(session, user_id)
-                                logger.info(f"[SUMMARY] 10턴 요약 완료")
-                            except Exception as summary_err:
-                                logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
-                        else:
-                            logger.info(f"[SUMMARY] 10턴 누적되었지만 이미 요약이 존재함: {new_count}개")
+                         logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
+                         try:
+                             # 동기적으로 요약 실행 (저장 보장)
+                             from app.core.summary import maybe_rollup_user_summary
+                             await maybe_rollup_user_summary(session, user_id)
+                             logger.info(f"[SUMMARY] 10턴 요약 완료 및 저장됨")
+                         except Exception as summary_err:
+                             logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
+                             # 요약 실패 시에도 계속 진행 (사용자 응답은 생성)
                     else:
                         logger.info(f"[SUMMARY] 10턴 미달: {new_count}개 (필요: {MAX_TURNS}개)")
                     
