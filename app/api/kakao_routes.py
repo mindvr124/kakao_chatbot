@@ -1491,7 +1491,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                 logger.warning(f"[SAVE_MESSAGE] AI 응답 메시지 저장 실패: {e}")
                                 break
 
-                    asyncio.create_task(_save_user_message_background(conv_id, user_text, x_request_id, user_id))
+                    # 사용자 메시지를 먼저 저장 (순서 보장)
+                    await _save_user_message_background(conv_id, user_text, x_request_id, user_id)
+                    # AI 응답을 나중에 저장
                     asyncio.create_task(_save_ai_response_background(conv_id, final_text, 0, x_request_id, user_id))
                 else:
                     # conv_id가 None이거나 temp_인 경우 백그라운드에서 저장 시도

@@ -389,18 +389,9 @@ class AIService:
                         result = await session.execute(stmt)
                         all_messages = list(result.scalars().all())
                     
-                    # 마지막 요약 이후 메시지 개수 확인 (사용자 입력 기준)
-                    from app.core.summary import get_or_init_user_summary
-                    us = await get_or_init_user_summary(session, user_id)
-                    
-                    # 사용자 입력 메시지만 카운트 (AI 응답 제외)
-                    if us and us.last_message_created_at:
-                        user_messages = [m for m in all_messages if m.role.value == "USER" and m.created_at and m.created_at > us.last_message_created_at]
-                        new_count = len(user_messages)
-                    else:
-                        # 요약이 없으면 사용자 메시지만 카운트
-                        user_messages = [m for m in all_messages if m.role.value == "USER"]
-                        new_count = len(user_messages)
+                    # 현재 대화 세션에서 사용자 메시지만 정확하게 카운트
+                    user_messages = [m for m in all_messages if m.role.value == "USER"]
+                    new_count = len(user_messages)
                     
                     # 10턴이 누적되었는지 확인하고 요약 실행
                     if new_count >= MAX_TURNS:
