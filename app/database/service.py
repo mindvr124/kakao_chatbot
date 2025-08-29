@@ -209,18 +209,9 @@ async def save_prompt_log(
         )
         session.add(log)
         
-        # 프롬프트 로그 저장 후 check_question_turn 감소 (턴마다 1씩)
-        if user_id:
-            try:
-                # 기존 세션을 사용하여 턴 카운트 감소
-                risk_state = await get_or_create_risk_state(session, user_id)
-                if risk_state.check_question_turn > 0:
-                    old_turn = risk_state.check_question_turn
-                    risk_state.check_question_turn = max(0, risk_state.check_question_turn - 1)
-                    logger.info(f"[PROMPT_LOG] check_question_turn 감소: {old_turn} -> {risk_state.check_question_turn}")
-                logger.info(f"[PROMPT_LOG] check_question_turn 감소 완료: user_id={user_id}")
-            except Exception as e:
-                logger.warning(f"[PROMPT_LOG] check_question_turn 감소 실패: {e}")
+        # 프롬프트 로그 저장 (check_question_turn 감소는 kakao_routes.py에서 처리)
+        # 중복 감소 방지를 위해 여기서는 제거
+        logger.info(f"[PROMPT_LOG] 프롬프트 로그 저장 완료: user_id={user_id}")
         
         await session.commit()
         return True
