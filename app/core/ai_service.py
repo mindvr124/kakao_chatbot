@@ -362,15 +362,32 @@ class AIService:
                     from app.config import settings
                     MAX_TURNS = getattr(settings, "summary_turn_window", 10)
                     
-                    # user_id 기준으로 전체 메시지 개수 확인
-                    stmt = (
-                        select(Message)
-                        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
-                        .where(DBConversation.user_id == user_id)
-                        .order_by(Message.created_at.asc())
-                    )
-                    result = await session.execute(stmt)
-                    all_messages = list(result.scalars().all())
+                    # conv_id를 conv_uuid로 변환
+                    conv_uuid: UUID | None = None
+                    try:
+                        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
+                    except Exception:
+                        conv_uuid = None
+                    
+                    # 현재 대화 세션(conv_id) 기준으로 메시지 개수 확인
+                    if conv_uuid:
+                        stmt = (
+                            select(Message)
+                            .where(Message.conv_id == conv_uuid)
+                            .order_by(Message.created_at.asc())
+                        )
+                        result = await session.execute(stmt)
+                        all_messages = list(result.scalars().all())
+                    else:
+                        # conv_id가 없으면 전체 사용자 메시지로 폴백
+                        stmt = (
+                            select(Message)
+                            .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+                            .where(DBConversation.user_id == user_id)
+                            .order_by(Message.created_at.asc())
+                        )
+                        result = await session.execute(stmt)
+                        all_messages = list(result.scalars().all())
                     
                     # 마지막 요약 이후 메시지 개수 확인 (사용자 입력 기준)
                     from app.core.summary import get_or_init_user_summary
@@ -400,7 +417,7 @@ class AIService:
                         logger.info(f"[SUMMARY] 10턴 미달: {new_count}개 (필요: {MAX_TURNS}개)")
                     
                     # 2분 비활성 요약은 background_tasks.py에서 처리되므로 여기서는 로그만
-                    logger.info(f"[SUMMARY] 현재 상태: 전체 {len(all_messages)}개, 신규 {new_count}개, 필요 {MAX_TURNS}개")
+                    logger.info(f"[SUMMARY] 현재 상태: {new_count}번째 턴, 필요 {MAX_TURNS}턴")
                     
                 except Exception as e:
                     logger.warning(f"[SUMMARY] 요약 체크 실패: {e}")
