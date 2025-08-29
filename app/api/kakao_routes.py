@@ -1517,10 +1517,15 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             except Exception as save_error:
                 logger.warning(f"Failed to schedule message persistence: {save_error}")
             
+            # 사용자 활동 시간 업데이트 (2분 비활성 요약을 위해)
             try:
-                update_last_activity(conv_id)
-            except Exception:
-                pass
+                if conv_id and not str(conv_id).startswith("temp_"):
+                    update_last_activity(conv_id)
+                    logger.info(f"[ACTIVITY] 사용자 활동 시간 업데이트: conv_id={conv_id}")
+                else:
+                    logger.info(f"[ACTIVITY] temp conv_id이므로 활동 시간 업데이트 건너뜀: {conv_id}")
+            except Exception as activity_err:
+                logger.warning(f"[ACTIVITY] 활동 시간 업데이트 실패: {activity_err}")
 
             logger.info(f"----- [9단계 완료: AI 응답 생성] -----")
             logger.info(f"===== [위험도 분석 완료] ==============================================")

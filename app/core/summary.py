@@ -173,11 +173,14 @@ async def maybe_rollup_user_summary(
             await save_log_message(session, "summary_rollup_skipped", "Summary rollup skipped", str(user_id), None, {"new_count": new_count, "need": MAX_TURNS})
         except Exception:
             pass
+        logger.info(f"[SUMMARY] 10턴 요약 스킵: 현재 {new_count}개, 필요 {MAX_TURNS}개 (user_id={user_id})")
         return
 
-    # 최근 MAX_TURNS 메시지 (user/assistant 포함)
+    # 전체 10턴 대화로 요약 생성
     recent = msgs[-MAX_TURNS:]
     existing_summary = (us.summary or "").strip()
+    
+    logger.info(f"[SUMMARY] 10턴 요약 시작: {len(recent)}개 메시지, 기존 요약 길이 {len(existing_summary)}자 (user_id={user_id})")
 
     # 프롬프트 구성 및 요약 생성
     history_text = []
@@ -216,6 +219,8 @@ async def maybe_rollup_user_summary(
         await save_log_message(session, "summary_rollup_saved", "Summary rollup saved", str(user_id), None, {"len": len(us.summary or ""), "used_msgs": len(recent)})
     except Exception:
         pass
+    
+    logger.info(f"[SUMMARY] 10턴 요약 완료: {len(us.summary or '')}자, {len(recent)}개 메시지 사용 (user_id={user_id})")
 
 async def upsert_user_summary_from_text(
     session: AsyncSession,

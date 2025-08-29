@@ -299,19 +299,27 @@ class AIService:
                 pass
 
         # 히스토리 구성 규칙
-        # - 요약이 없으면 대화 시작부터 누적하여 최대 20 메시지 전송
-        # - 요약이 있으면 최근 3쌍(=6 메시지)만 전송
+        # - 요약이 있으면 최근 3턴(6개 메시지)만 전송 (요약된 부분은 제외)
+        # - 요약이 없으면 최대 20 메시지 전송
         # 히스토리는 user_id 기준으로 조회해 conv_id 변경의 영향을 받지 않도록 함
         history_messages: List[Message] = await self.get_user_history(session, target_user_id or "")
         if has_user_summary:
+            # 요약이 있으면 최근 3턴(6개 메시지)만 포함
             max_pairs = 3
             max_msgs = max_pairs * 2
             if len(history_messages) > max_msgs:
                 history_messages = history_messages[-max_msgs:]
+                logger.info(f"[HISTORY] 요약 존재: 최근 3턴({max_msgs}개 메시지)만 포함")
+            else:
+                logger.info(f"[HISTORY] 요약 존재: 전체 {len(history_messages)}개 메시지 포함")
         else:
+            # 요약이 없으면 최대 20 메시지 전송
             max_window = getattr(settings, "summary_turn_window", 20)
             if len(history_messages) > max_window:
                 history_messages = history_messages[-max_window:]
+                logger.info(f"[HISTORY] 요약 없음: 최근 {max_window}개 메시지만 포함")
+            else:
+                logger.info(f"[HISTORY] 요약 없음: 전체 {len(history_messages)}개 메시지 포함")
         for m in history_messages:
             # Enum의 value를 안전하게 추출
             role_value = getattr(m.role, "value", None) or (m.role if isinstance(m.role, str) else str(m.role))
@@ -333,6 +341,49 @@ class AIService:
             # 이름 추출은 kakao_routes.py에서 처리하므로 여기서는 제거
 
             messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
+
+            # 10턴 요약 및 2분 비활성 요약 체크
+            if user_id:
+                try:
+                    # 10턴 요약 체크 (10턴이 누적되었는지 확인)
+                    from app.config import settings
+                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                    
+                    # user_id 기준으로 전체 메시지 개수 확인
+                    from app.database.models import Conversation as DBConversation
+                    from sqlmodel import select
+                    stmt = (
+                        select(Message)
+                        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+                        .where(DBConversation.user_id == user_id)
+                        .order_by(Message.created_at.asc())
+                    )
+                    result = await session.execute(stmt)
+                    all_messages = list(result.scalars().all())
+                    
+                    # 마지막 요약 이후 메시지 개수 확인
+                    from app.core.summary import get_or_init_user_summary
+                    us = await get_or_init_user_summary(session, user_id)
+                    if us and us.last_message_created_at:
+                        new_count = sum(1 for m in all_messages if m.created_at and m.created_at > us.last_message_created_at)
+                    else:
+                        new_count = len(all_messages)
+                    
+                    # 10턴이 누적되었으면 요약 실행
+                    if new_count >= MAX_TURNS:
+                        logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
+                        try:
+                            from app.core.summary import maybe_rollup_user_summary
+                            await maybe_rollup_user_summary(session, user_id)
+                            logger.info(f"[SUMMARY] 10턴 요약 완료")
+                        except Exception as summary_err:
+                            logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
+                    
+                    # 2분 비활성 요약은 background_tasks.py에서 처리되므로 여기서는 로그만
+                    logger.info(f"[SUMMARY] 현재 상태: 전체 {len(all_messages)}개, 신규 {new_count}개, 필요 {MAX_TURNS}개")
+                    
+                except Exception as e:
+                    logger.warning(f"[SUMMARY] 요약 체크 실패: {e}")
 
             logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
 

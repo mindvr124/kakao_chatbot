@@ -296,7 +296,15 @@ def update_last_activity(conv_id: str | None):
         _ = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
     except Exception:
         return
+    
+    old_count = len(_last_activity_map)
     _last_activity_map[str(conv_id)] = datetime.now()
+    new_count = len(_last_activity_map)
+    
+    if new_count > old_count:
+        logger.info(f"[ACTIVITY] 새 세션 활동 감지: conv_id={conv_id} (총 {new_count}개 세션 감시 중)")
+    else:
+        logger.debug(f"[ACTIVITY] 기존 세션 활동 업데이트: conv_id={conv_id}")
 
 async def _watch_sessions_loop():
     global _watcher_task
@@ -304,14 +312,18 @@ async def _watch_sessions_loop():
         while True:
             now = datetime.now()
             stale = [cid for cid, ts in list(_last_activity_map.items()) if (now - ts).total_seconds() > _inactivity_seconds]
+            if stale:
+                logger.info(f"[WATCHER] {len(stale)}개 세션 비활성 감지: {stale}")
+            
             for conv_id in stale:
                 try:
+                    logger.info(f"[WATCHER] 2분 비활성 요약 시작: conv_id={conv_id}")
                     await _summarize_and_close(conv_id)
                 except Exception as e:
                     logger.warning(f"Session summarize failed for {conv_id}: {e}")
                 finally:
                     _last_activity_map.pop(conv_id, None)
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)  # 2초마다 체크하여 더 정확한 비활성 감지
     except asyncio.CancelledError:
         return
 
@@ -381,7 +393,7 @@ async def _summarize_and_close(conv_id: str):
                         except Exception:
                             pass
                         raise
-                logger.info(f"요약 저장 완료 (user_id={user_id}, conv_id={conv_uuid})")
+                logger.info(f"[WATCHER] 2분 비활성 요약 완료 (user_id={user_id}, conv_id={conv_uuid})")
             except Exception as e:
                 logger.warning(f"2분 요약 저장 실패: {e}")
                 try:
@@ -407,4 +419,6 @@ async def ensure_watcher_started():
     global _watcher_task
     if _watcher_task is None or _watcher_task.done():
         _watcher_task = asyncio.create_task(_watch_sessions_loop())
-        logger.info("Session watcher started")
+        logger.info("[WATCHER] 세션 감시자 시작됨 (2분 비활성 요약 기능 활성화)")
+    else:
+        logger.debug("[WATCHER] 세션 감시자가 이미 실행 중입니다")
