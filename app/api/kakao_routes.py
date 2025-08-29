@@ -1478,13 +1478,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.warning(f"AI message log save failed: {log_err}")
             
             try:
-                if not str(conv_id).startswith("temp_") and conv_id:
+                if conv_id and not str(conv_id).startswith("temp_"):
                     async def _save_user_message_background(conv_id, user_text, x_request_id, user_id):
                         async for s in get_session():
                             try:
                                 await save_message(s, conv_id, "user", user_text, x_request_id, None, user_id)
                                 break
-                            except Exception:
+                            except Exception as e:
+                                logger.warning(f"[SAVE_MESSAGE] 사용자 메시지 저장 실패: {e}")
                                 break
 
                     async def _save_ai_response_background(conv_id, final_text, tokens_used, x_request_id, user_id):
@@ -1492,12 +1493,14 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                             try:
                                 await save_message(s, conv_id, "assistant", final_text, x_request_id, tokens_used, user_id)
                                 break
-                            except Exception:
+                            except Exception as e:
+                                logger.warning(f"[SAVE_MESSAGE] AI 응답 메시지 저장 실패: {e}")
                                 break
 
                     asyncio.create_task(_save_user_message_background(conv_id, user_text, x_request_id, user_id))
                     asyncio.create_task(_save_ai_response_background(conv_id, final_text, 0, x_request_id, user_id))
                 else:
+                    # conv_id가 None이거나 temp_인 경우 백그라운드에서 저장 시도
                     async def _persist_when_db_ready(user_id: str, user_text: str, reply_text: str, request_id: str | None):
                         async for s in get_session():
                             try:

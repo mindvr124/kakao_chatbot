@@ -149,8 +149,13 @@ async def save_message(
                 logger.error(f"[SAVE_MESSAGE] conv_id 재조회 실패: {e}")
                 raise ValueError(f"Failed to retrieve conv_id for user: {user_id}")
         
+        # conv_id가 여전히 None이면 메시지 저장 불가
+        if conv_id is None:
+            logger.error(f"[SAVE_MESSAGE] conv_id가 None이므로 메시지 저장 불가: user_id={user_id}")
+            raise ValueError(f"Cannot save message: conv_id is None for user: {user_id}")
+        
         # temp_로 시작하는 conv_id는 처리하지 않음
-        if conv_id and str(conv_id).startswith("temp_"):
+        if str(conv_id).startswith("temp_"):
             logger.warning(f"[SAVE_MESSAGE] Skipping temp conv_id: {conv_id}")
             raise ValueError(f"Cannot save message for temporary conversation: {conv_id}")
         
