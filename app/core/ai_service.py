@@ -351,7 +351,6 @@ class AIService:
                     
                     # user_id 기준으로 전체 메시지 개수 확인
                     from app.database.models import Conversation as DBConversation
-                    from sqlmodel import select
                     stmt = (
                         select(Message)
                         .join(DBConversation, Message.conv_id == DBConversation.conv_id)
@@ -474,39 +473,41 @@ class AIService:
                 pass
 
             # 응답 메시지 저장 및 프롬프트 로그 생성
-            try:
-                from app.database.models import Message, MessageRole
-                msg = Message(
-                    conv_id=conv_id,
-                    user_id=user_id,
-                    role=MessageRole.ASSISTANT,
-                    content=content,
-                    tokens=tokens_used,
-                    request_id=request_id
-                )
-                session.add(msg)
-                await session.commit()
-                await session.refresh(msg)
+            # conv_id가 유효한 경우에만 메시지 저장
+            if conv_id and not str(conv_id).startswith("temp_"):
+                try:
+                    from app.database.models import MessageRole
+                    msg = Message(
+                        conv_id=conv_id,
+                        user_id=user_id,
+                        role=MessageRole.ASSISTANT,
+                        content=content,
+                        tokens=tokens_used,
+                        request_id=request_id
+                    )
+                    session.add(msg)
+                    await session.commit()
+                    await session.refresh(msg)
 
-                # 메시지 ID로 프롬프트 로그 저장
-                success = await save_prompt_log(
-                    session=session,
-                    conv_id=conv_id,
-                    user_id=user_id,  # user_id 추가
-                    model=self.model,
-                    prompt_name=prompt_name,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    messages_json=messages_json,
-                    msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
-                )
-                if not success:
-                    logger.warning("Failed to save prompt log")
+                    # 메시지 ID로 프롬프트 로그 저장
+                    success = await save_prompt_log(
+                        session=session,
+                        conv_id=conv_id,
+                        user_id=user_id,  # user_id 추가
+                        model=self.model,
+                        prompt_name=prompt_name,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                        messages_json=messages_json,
+                        msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
+                    )
+                    if not success:
+                        logger.warning("Failed to save prompt log")
 
-                # 이름 추출은 kakao_routes.py에서 처리하므로 제거
-
-            except Exception as e:
-                logger.warning(f"Failed to save message or prompt log: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to save message or prompt log: {e}")
+            else:
+                logger.info(f"[MESSAGE_SAVE] conv_id가 유효하지 않아 메시지 저장 건너뜀: conv_id={conv_id}")
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
             return content, tokens_used
