@@ -988,6 +988,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     logger.info(f"[URGENT] 긴급 응답 플래그 카운트다운: {user_risk_history.urgent_response_turn_count}턴 남음")
         
         # 긴급 응답 플래그가 설정되지 않은 경우에만 검출
+        # 20턴 카운트 중에도 긴급 안내는 계속 체크 (점수 누적과는 별개)
         if not (hasattr(user_risk_history, 'urgent_response_sent') and user_risk_history.urgent_response_sent):
             if user_risk_history.turns:
                 recent_turns = list(user_risk_history.turns)[-5:]
@@ -1001,7 +1002,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                             user_id_str = str(user_id) if user_id else "unknown"
                             safe_conv_id = conv_id if conv_id and not str(conv_id).startswith("temp_") else None
                             await save_log_message(session, "urgent_risk_trigger",
-                                                f"Urgent risk trigger: 10점 키워드 {high_risk_count}번", user_id_str, safe_conv_id,
+                                                f"Urgent risk trigger: 10점 키워드 {high_risk_count}번 (20턴 카운트 중)", user_id_str, safe_conv_id,
                                                 {"source": "urgent_risk", "high_risk_count": high_risk_count, "x_request_id": x_request_id})
                         except Exception as e:
                             logger.warning(f"[URGENT] urgent_risk_trigger 로그 저장 실패: {e}")
