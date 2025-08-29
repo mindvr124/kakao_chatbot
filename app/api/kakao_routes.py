@@ -18,9 +18,7 @@ from app.core.ai_service import ai_service
 from app.core.background_tasks import (
     update_last_activity,
 )
-from app.core.summary import (
-    maybe_rollup_user_summary,
-)
+# 10턴 요약은 ai_service.py에서 처리하므로 import 제거
 from app.database.db import get_session
 from app.database.models import AppUser, Conversation, Message
 from app.database.service import (
@@ -271,10 +269,8 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     await save_log_message(s, "callback_final_sent", f"Callback final sent: {len(final_text)} chars", str(user_id), conv_id_value, {"tokens": tokens_used, "request_id": request_id})
                 except Exception as log_err:
                     logger.warning(f"Callback log save failed: {log_err}")
-                try:
-                    await maybe_rollup_user_summary(s, user_id, conv_id_value)
-                except Exception as summary_err:
-                    logger.warning(f"User summary rollup failed: {summary_err}")
+                # 10턴 요약은 ai_service.py에서 처리하므로 여기서는 제거
+                pass
                 break
             except Exception as inner_e:
                 logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
@@ -339,10 +335,8 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                         except Exception:
                             pass
                         raise
-                    try:
-                        await maybe_rollup_user_summary(s, user_id, conv.conv_id)
-                    except Exception:
-                        pass
+                    # 10턴 요약은 ai_service.py에서 처리하므로 여기서는 제거
+                    pass
                     break
                 except Exception as persist_err:
                     try:
