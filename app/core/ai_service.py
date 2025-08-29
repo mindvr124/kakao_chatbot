@@ -360,25 +360,30 @@ class AIService:
                     result = await session.execute(stmt)
                     all_messages = list(result.scalars().all())
                     
-                    # 마지막 요약 이후 메시지 개수 확인
+                    # 마지막 요약 이후 메시지 개수 확인 (사용자 입력 기준)
                     from app.core.summary import get_or_init_user_summary
                     us = await get_or_init_user_summary(session, user_id)
+                    
+                    # 사용자 입력 메시지만 카운트 (AI 응답 제외)
                     if us and us.last_message_created_at:
-                        new_count = sum(1 for m in all_messages if m.created_at and m.created_at > us.last_message_created_at)
+                        user_messages = [m for m in all_messages if m.role.value == "USER" and m.created_at and m.created_at > us.last_message_created_at]
+                        new_count = len(user_messages)
                     else:
-                        new_count = len(all_messages)
+                        # 요약이 없으면 사용자 메시지만 카운트
+                        user_messages = [m for m in all_messages if m.role.value == "USER"]
+                        new_count = len(user_messages)
                     
                     # 10턴이 누적되었는지 확인하고 요약 실행
                     if new_count >= MAX_TURNS:
-                         logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
-                         try:
-                             # 동기적으로 요약 실행 (저장 보장)
-                             from app.core.summary import maybe_rollup_user_summary
-                             await maybe_rollup_user_summary(session, user_id)
-                             logger.info(f"[SUMMARY] 10턴 요약 완료 및 저장됨")
-                         except Exception as summary_err:
-                             logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
-                             # 요약 실패 시에도 계속 진행 (사용자 응답은 생성)
+                        logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
+                        try:
+                            # 동기적으로 요약 실행 (저장 보장)
+                            from app.core.summary import maybe_rollup_user_summary
+                            await maybe_rollup_user_summary(session, user_id)
+                            logger.info(f"[SUMMARY] 10턴 요약 완료 및 저장됨")
+                        except Exception as summary_err:
+                            logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
+                            # 요약 실패 시에도 계속 진행 (사용자 응답은 생성)
                     else:
                         logger.info(f"[SUMMARY] 10턴 미달: {new_count}개 (필요: {MAX_TURNS}개)")
                     
