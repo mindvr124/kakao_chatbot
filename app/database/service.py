@@ -13,8 +13,24 @@ logger = logging.getLogger(__name__)
 
 async def get_active_prompt_name(session: AsyncSession) -> str:
     """현재 활성화된 프롬프트 템플릿의 이름을 반환합니다."""
-    # 프롬프트 템플릿 자동생성 방지 - 고정값만 반환
-    return "온유"
+    try:
+        # 활성화된 프롬프트 템플릿 조회
+        stmt = select(PromptTemplate).where(PromptTemplate.is_active == True).order_by(PromptTemplate.version.desc()).limit(1)
+        try:
+            result = await session.execute(stmt)
+            active_prompt = result.scalar_one_or_none()
+            if active_prompt:
+                logger.info(f"[PROMPT] 활성 프롬프트 조회 성공: {active_prompt.name}")
+                return active_prompt.name
+            else:
+                logger.warning(f"[PROMPT] 활성 프롬프트가 없음, 기본값 '온유' 반환")
+                return "온유"
+        except Exception as e:
+            logger.warning(f"[PROMPT] 프롬프트 조회 실패: {e}, 기본값 '온유' 반환")
+            return "온유"
+    except Exception as e:
+        logger.error(f"[PROMPT] get_active_prompt_name 전체 실패: {e}, 기본값 '온유' 반환")
+        return "온유"
 
 async def get_user_name(session: AsyncSession, user_id: str) -> str | None:
     """사용자 이름을 조회합니다. 없으면 None을 반환합니다."""
@@ -498,7 +514,7 @@ async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskS
             risk_state = RiskState(
                 user_id=user_id, 
                 score=0,
-                last_check_score=None,  # 명시적으로 None 설정
+                last_check_score=None,  # 명시적으로 None 설정 (체크 질문 응답 전까지 유지)
                 check_question_turn=0,  # 명시적으로 0 설정
                 check_question_sent=False  # 명시적으로 False 설정
             )
@@ -532,9 +548,9 @@ async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> 
         risk_state = await get_or_create_risk_state(session, user_id)
         logger.info(f"[RISK_DB] RiskState 조회/생성 완료: {risk_state.user_id}")
         
-        # check_question_turn이 0이 아닐 때는 score를 0으로 초기화
+        # check_question_turn이 0이 아닐 때는 score만 0으로 초기화 (last_check_score는 유지)
         if risk_state.check_question_turn != 0:
-            logger.info(f"[RISK_DB] 체크 질문 턴 카운트 중 ({risk_state.check_question_turn}턴 남음): score를 0으로 초기화")
+            logger.info(f"[RISK_DB] 체크 질문 턴 카운트 중 ({risk_state.check_question_turn}턴 남음): score만 0으로 초기화")
             risk_state.score = 0
         else:
             # 점수 업데이트

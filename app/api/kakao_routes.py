@@ -962,12 +962,16 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # ----- [3단계: 위험도 분석] -----
         logger.info(f"----- [3단계: 위험도 분석 시작] -----")
+        # 20턴 카운트 중일 때도 add_turn을 호출하여 turns에 턴을 추가 (긴급 체크를 위해)
+        # 단, 점수 누적은 건너뜀
         if user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0:
-            logger.info(f"[RISK] 체크 질문 쿨다운 중: {user_risk_history.check_question_turn_count}턴 남음. 점수 누적 건너뜀")
-            turn_analysis = {'score': 0, 'flags': {}, 'evidence': []}
+            logger.info(f"[RISK] 체크 질문 쿨다운 중: {user_risk_history.check_question_turn_count}턴 남음. add_turn은 호출하되 점수 누적은 건너뜀")
+            # add_turn을 호출하여 turns에 턴 추가 (긴급 체크를 위해)
+            turn_analysis = user_risk_history.add_turn(user_text_stripped)
+            # 하지만 점수는 0으로 처리
             risk_score = 0
-            flags = {}
-            cumulative_score = 0
+            flags = turn_analysis['flags']  # flags는 실제 분석 결과 사용
+            cumulative_score = 0  # 누적 점수는 0
         else:
             turn_analysis = user_risk_history.add_turn(user_text_stripped)
             risk_score = turn_analysis['score']
