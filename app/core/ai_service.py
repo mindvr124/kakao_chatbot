@@ -135,17 +135,29 @@ class AIService:
         return messages
 
     @traceable
-    async def get_user_history(self, session: AsyncSession, user_id: str) -> List[Message]:
-        """user_id 기준으로 모든 대화 메시지를 시간순으로 반환합니다(conv_id 변경 무관)."""
+    async def get_user_history(self, session: AsyncSession, user_id: str, conv_id: Optional[UUID] = None) -> List[Message]:
+        """사용자 대화 히스토리를 반환합니다. conv_id가 있으면 해당 대화만, 없으면 전체 사용자 대화를 반환합니다."""
         if not user_id:
             return []
+        
         from app.database.models import Conversation as DBConversation
-        stmt = (
-            select(Message)
-            .join(DBConversation, Message.conv_id == DBConversation.conv_id)
-            .where(DBConversation.user_id == user_id)
-            .order_by(Message.created_at.asc())
-        )
+        
+        if conv_id:
+            # 특정 대화 세션의 메시지만 가져오기
+            stmt = (
+                select(Message)
+                .where(Message.conv_id == conv_id)
+                .order_by(Message.created_at.asc())
+            )
+        else:
+            # 전체 사용자 대화 가져오기 (기존 방식)
+            stmt = (
+                select(Message)
+                .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+                .where(DBConversation.user_id == user_id)
+                .order_by(Message.created_at.asc())
+            )
+        
         try:
             result = await session.execute(stmt)
         except Exception as e:
@@ -302,8 +314,8 @@ class AIService:
         # 히스토리 구성 규칙
         # - 요약이 있으면 최근 3턴(6개 메시지)만 전송 (요약된 부분은 제외)
         # - 요약이 없으면 최대 20 메시지 전송
-        # 히스토리는 user_id 기준으로 조회해 conv_id 변경의 영향을 받지 않도록 함
-        history_messages: List[Message] = await self.get_user_history(session, target_user_id or "")
+        # 히스토리는 현재 대화 세션(conv_id) 기준으로 조회해 순서 보장
+        history_messages: List[Message] = await self.get_user_history(session, target_user_id or "", conv_uuid)
         if has_user_summary:
             # 요약이 있으면 최근 3턴(6개 메시지)만 포함
             max_pairs = 3
