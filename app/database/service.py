@@ -535,8 +535,14 @@ async def update_risk_score(session: AsyncSession, user_id: str, score: int) -> 
         risk_state = await get_or_create_risk_state(session, user_id)
         logger.info(f"[RISK_DB] RiskState 조회/생성 완료: {risk_state.user_id}")
         
-        # 점수 업데이트
-        risk_state.score = score
+        # check_question_turn이 0이 아닐 때는 score를 0으로 초기화
+        if risk_state.check_question_turn != 0:
+            logger.info(f"[RISK_DB] 체크 질문 턴 카운트 중 ({risk_state.check_question_turn}턴 남음): score를 0으로 초기화")
+            risk_state.score = 0
+        else:
+            # 점수 업데이트
+            risk_state.score = score
+            
         risk_state.last_updated = datetime.now(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
         
         logger.info(f"[RISK_DB] 점수 및 시간 업데이트 완료: score={risk_state.score}, last_updated={risk_state.last_updated}")
