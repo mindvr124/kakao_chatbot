@@ -1027,11 +1027,9 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         # ----- [5단계: 데이터베이스 저장] -----
         logger.info(f"----- [5단계: 데이터베이스 저장 시작] -----")
         try:
-            if not (user_risk_history.check_question_turn_count and user_risk_history.check_question_turn_count > 0):
-                await update_risk_score(session, user_id, cumulative_score)
-                logger.info(f"[RISK] DB 저장 완료: {cumulative_score}점")
-            else:
-                logger.info(f"[RISK] 체크 질문 쿨다운 중이므로 DB 점수 업데이트 생략")
+            # 매 턴마다 update_risk_score 호출 (턴 카운트 중일 때는 내부에서 0으로 초기화)
+            await update_risk_score(session, user_id, cumulative_score)
+            logger.info(f"[RISK] DB 저장 완료: {cumulative_score}점 (턴 카운트: {user_risk_history.check_question_turn_count})")
         except Exception as e:
             logger.error(f"[RISK] DB 저장 실패: {e}")
         
