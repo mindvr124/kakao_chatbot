@@ -977,6 +977,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         
         # ----- [4단계: 긴급 위험도 체크] -----
         logger.info(f"----- [4단계: 긴급 위험도 체크 시작] -----")
+        logger.info(f"[URGENT_DEBUG] turns 개수: {len(user_risk_history.turns)}")
+        logger.info(f"[URGENT_DEBUG] turns 내용: {[turn.get('score', 'N/A') for turn in user_risk_history.turns]}")
         if hasattr(user_risk_history, 'urgent_response_sent') and user_risk_history.urgent_response_sent:
             if hasattr(user_risk_history, 'urgent_response_turn_count'):
                 user_risk_history.urgent_response_turn_count -= 1
@@ -992,6 +994,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
         if not (hasattr(user_risk_history, 'urgent_response_sent') and user_risk_history.urgent_response_sent):
             if user_risk_history.turns:
                 recent_turns = list(user_risk_history.turns)[-5:]
+                logger.info(f"[URGENT_DEBUG] 최근 5턴: {[turn.get('score', 'N/A') for turn in recent_turns]}")
                 if len(recent_turns) >= 2:
                     high_risk_count = sum(1 for turn in recent_turns if turn['score'] == 10)
                     logger.info(f"[URGENT] 5턴 내 10점 키워드 {high_risk_count}번 감지")
@@ -1022,6 +1025,8 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                             logger.warning(f"[URGENT] 턴 제거 및 플래그 설정 실패: {e}")
                         
                         return JSONResponse(content=_safe_reply_kakao("critical"), media_type="application/json; charset=utf-8")
+            else:
+                logger.info(f"[URGENT_DEBUG] turns가 비어있음 - 긴급 체크 건너뜀")
         
         logger.info(f"----- [4단계 완료: 긴급 위험도 체크] -----")
         

@@ -495,7 +495,13 @@ async def get_or_create_risk_state(session: AsyncSession, user_id: str) -> RiskS
         risk_state = await session.get(RiskState, user_id)
         if not risk_state:
             logger.info(f"[RISK_DB] RiskState가 존재하지 않음, 새로 생성: {user_id}")
-            risk_state = RiskState(user_id=user_id, score=0)
+            risk_state = RiskState(
+                user_id=user_id, 
+                score=0,
+                last_check_score=None,  # 명시적으로 None 설정
+                check_question_turn=0,  # 명시적으로 0 설정
+                check_question_sent=False  # 명시적으로 False 설정
+            )
             session.add(risk_state)
             try:
                 await session.commit()
