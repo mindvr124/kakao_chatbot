@@ -507,7 +507,7 @@ class AIService:
                 "model": self.model,
                 "prompt_name": prompt_name,
                 "temperature": self.temperature,
-                "max_completion_tokens": max_tokens
+                "max_tokens": max_tokens
             }
             
             return content, tokens_used, prompt_params
