@@ -92,7 +92,7 @@ async def _save_user_message_background(conv_id: str, user_text: str, request_id
         logger.bind(x_request_id=request_id).exception(f"Failed to save user message in background: {e}")
 
 
-async def _save_ai_response_background(conv_id: str, final_text: str, tokens_used: int, request_id: str | None, user_id: str | None = None):
+async def _save_ai_response_background(conv_id: str, final_text: str, tokens_used: int, request_id: str | None, user_id: str | None = None, messages_json: str | None = None, model: str | None = None, prompt_name: str | None = None, temperature: float | None = None, max_tokens: int | None = None):
     """백그라운드에서 AI 답변을 DB에 저장합니다."""
     try:
         logger.bind(x_request_id=request_id).info(f"Saving AI response to DB in background")
@@ -138,17 +138,19 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                 # 프롬프트 로그 저장 (메시지 ID 연결)
                 try:
                     from app.database.service import save_prompt_log
+                    logger.info(f"[PROMPT_LOG] 프롬프트 로그 저장 시도: msg_id={msg.msg_id}, model={model}, prompt_name={prompt_name}, temperature={temperature}, max_tokens={max_tokens}, messages_json_len={len(messages_json) if messages_json else 0}")
                     await save_prompt_log(
                         session=session,
                         msg_id=msg.msg_id,
                         conv_id=conv_id,
                         user_id=user_id,
-                        model="gpt-4o",  # 기본 모델
-                        prompt_name="온유",
-                        temperature=0.2,
-                        max_tokens=1000,
-                        messages_json=""
+                        model=model or "gpt-4o",  # 실제 사용된 모델
+                        prompt_name=prompt_name or "온유",  # 실제 사용된 프롬프트명
+                        temperature=temperature or 0.2,  # 실제 사용된 온도
+                        max_tokens=max_tokens or 150,  # 실제 사용된 토큰수
+                        messages_json=messages_json or "{}"  # 실제 메시지 데이터
                     )
+                    logger.info(f"[PROMPT_LOG] 프롬프트 로그 저장 성공: msg_id={msg.msg_id}")
                 except Exception as log_err:
                     logger.warning(f"[PROMPT_LOG] 프롬프트 로그 저장 실패: {log_err}")
                 

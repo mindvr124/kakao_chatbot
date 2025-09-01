@@ -256,7 +256,7 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                 except Exception as save_user_err:
                     logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
 
-                final_text, tokens_used = await ai_service.generate_response(
+                final_text, tokens_used, prompt_params = await ai_service.generate_response(
                     session=s,
                     conv_id=conv_id_value,
                     user_input=user_text,
@@ -264,25 +264,16 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     user_id=user_id,
                     request_id=request_id
                 )
-                # AI 응답 메시지 저장
-                msg = await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
-                
-                # 프롬프트 로그 저장 (메시지 ID 연결)
-                try:
-                    from app.database.service import save_prompt_log
-                    await save_prompt_log(
-                        session=s,
-                        msg_id=msg.msg_id,
-                        conv_id=conv_id_value,
-                        user_id=user_id,
-                        model="gpt-4o",  # 기본 모델
-                        prompt_name="온유",
-                        temperature=0.2,
-                        max_tokens=1000,
-                        messages_json=""
-                    )
-                except Exception as log_err:
-                    logger.warning(f"[PROMPT_LOG] 콜백 프롬프트 로그 저장 실패: {log_err}")
+                # AI 응답 메시지 저장 및 프롬프트 로그 저장은 background_tasks로 처리
+                from app.core.background_tasks import _save_ai_response_background
+                await _save_ai_response_background(
+                    conv_id_value, final_text, tokens_used, request_id, user_id,
+                    prompt_params.get("messages_json"),
+                    prompt_params.get("model"),
+                    prompt_params.get("prompt_name"),
+                    prompt_params.get("temperature"),
+                    prompt_params.get("max_completion_tokens")
+                )
                 
                 # 10턴 요약 체크 및 실행
                 try:
@@ -354,7 +345,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
 
         # 빠른 AI 응답 생성
         # request_id가 정의되어 있지 않으므로 x_request_id를 대신 사용합니다.
-        quick_text, quick_tokens = await asyncio.wait_for(
+        quick_text, quick_tokens, quick_prompt_params = await asyncio.wait_for(
             ai_service.generate_response(
                 session=session,
                 conv_id=quick_conv_id,
@@ -367,7 +358,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
         )
 
         # 백그라운드에서 메시지 저장
-        async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None):
+        async def _persist_quick(user_id: str, user_text: str, reply_text: str, request_id: str | None, prompt_params: dict):
             async for s in get_session():
                 try:
                     await upsert_user(s, user_id)
@@ -375,25 +366,16 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                     try:
                         await save_message(s, conv.conv_id, "user", user_text, request_id, None, user_id)
                         
-                        # AI 응답 메시지 저장
-                        msg = await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), request_id, quick_tokens, user_id)
-                        
-                        # 프롬프트 로그 저장 (메시지 ID 연결)
-                        try:
-                            from app.database.service import save_prompt_log
-                            await save_prompt_log(
-                                session=s,
-                                msg_id=msg.msg_id,
-                                conv_id=conv.conv_id,
-                                user_id=user_id,
-                                model="gpt-4o",  # 기본 모델
-                                prompt_name="온유",
-                                temperature=0.2,
-                                max_tokens=1000,
-                                messages_json=""
-                            )
-                        except Exception as log_err:
-                            logger.warning(f"[PROMPT_LOG] 빠른 응답 프롬프트 로그 저장 실패: {log_err}")
+                        # AI 응답 메시지 저장 및 프롬프트 로그 저장은 background_tasks로 처리
+                        from app.core.background_tasks import _save_ai_response_background
+                        await _save_ai_response_background(
+                            conv.conv_id, remove_markdown(reply_text), quick_tokens, request_id, user_id,
+                            prompt_params.get("messages_json"),
+                            prompt_params.get("model"),
+                            prompt_params.get("prompt_name"),
+                            prompt_params.get("temperature"),
+                            prompt_params.get("max_completion_tokens")
+                        )
                         
                         # 10턴 요약 체크 및 실행
                         try:
@@ -440,7 +422,7 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                     logger.bind(x_request_id=request_id).exception(f"Persist quick path failed: {persist_err}")
                     break
 
-        asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id))
+        asyncio.create_task(_persist_quick(user_id, user_text, quick_text, x_request_id, quick_prompt_params))
 
         try:
             update_last_activity(quick_conv_id)
@@ -1541,7 +1523,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             
 
             try:
-                final_text, tokens_used = await asyncio.wait_for(
+                final_text, tokens_used, prompt_params = await asyncio.wait_for(
                     ai_service.generate_response(
                         session=session,
                         conv_id=conv_id,
@@ -1554,7 +1536,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 )
             except asyncio.TimeoutError:
                 logger.warning("AI generation timeout. Falling back to canned message.")
-                final_text, tokens_used = ("답변 생성이 길어졌어요. 잠시만 기다려주세요.", 0)
+                final_text, tokens_used, prompt_params = ("답변 생성이 길어졌어요. 잠시만 기다려주세요.", 0, {})
             logger.info(f"AI response generated: {final_text[:50]}...")
             
 
@@ -1582,22 +1564,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                 # AI 응답 메시지 저장
                                 msg = await save_message(s, conv_id, "assistant", final_text, x_request_id, tokens_used, user_id)
                                 
-                                # 프롬프트 로그 저장 (메시지 ID 연결)
-                                try:
-                                    from app.database.service import save_prompt_log
-                                    await save_prompt_log(
-                                        session=s,
-                                        msg_id=msg.msg_id,
-                                        conv_id=conv_id,
-                                        user_id=user_id,
-                                        model="gpt-4o",  # 기본 모델
-                                        prompt_name="온유",
-                                        temperature=0.2,
-                                        max_tokens=1000,
-                                        messages_json=""
-                                    )
-                                except Exception as log_err:
-                                    logger.warning(f"[PROMPT_LOG] 프롬프트 로그 저장 실패: {log_err}")
+                                # 프롬프트 로그는 background_tasks.py에서 처리됨
                                 
                                 # 10턴 요약 체크 및 실행
                                 try:

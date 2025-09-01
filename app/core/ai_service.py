@@ -348,7 +348,7 @@ class AIService:
         return messages
 
     @traceable
-    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None, request_id: Optional[str] = None) -> tuple[str, int]:
+    async def generate_response(self, session: AsyncSession, conv_id, user_input: str, prompt_name: str = "default", user_id: Optional[str] = None, request_id: Optional[str] = None) -> tuple[str, int, dict]:
         """Chat Completions로 전체 히스토리와 요약(지난번 대화)을 포함한 답변을 생성합니다."""
         try:
             # 이름 추출은 kakao_routes.py에서 처리하므로 여기서는 제거
@@ -497,35 +497,24 @@ class AIService:
             except Exception:
                 pass
 
-            # 메시지 저장은 호출하는 곳에서 처리하므로 여기서는 제거
-            # 프롬프트 로그만 저장 (메시지 ID 없이)
-            if conv_id and not str(conv_id).startswith("temp_"):
-                try:
-                    success = await save_prompt_log(
-                        session=session,
-                        conv_id=conv_id,
-                        user_id=user_id,
-                        model=self.model,
-                        prompt_name=prompt_name,
-                        temperature=self.temperature,
-                        max_tokens=self.max_tokens,
-                        messages_json=messages_json,
-                        msg_id=None  # 메시지 ID는 나중에 설정
-                    )
-                    if not success:
-                        logger.warning("Failed to save prompt log")
-
-                except Exception as e:
-                    logger.warning(f"Failed to save prompt log: {e}")
-            else:
-                logger.info(f"[PROMPT_LOG] conv_id가 유효하지 않아 프롬프트 로그 저장 건너뜀: conv_id={conv_id}")
+            # 메시지 저장과 프롬프트 로그 저장은 호출하는 곳에서 처리함
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
-            return content, tokens_used
+            
+            # 프롬프트 로그에 필요한 파라미터들을 반환
+            prompt_params = {
+                "messages_json": messages_json,
+                "model": self.model,
+                "prompt_name": prompt_name,
+                "temperature": self.temperature,
+                "max_completion_tokens": max_tokens
+            }
+            
+            return content, tokens_used, prompt_params
 
         except Exception as e:
             logger.error(f"OpenAI API error: {e}")
-            return "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요.", 0
+            return "죄송합니다. 일시적인 오류가 발생했습니다. 다시 한 번 시도해주세요.", 0, {}
 
     async def generate_simple_response(self, user_input: str, request_id: Optional[str] = None) -> str:
         """데이터베이스 없이 간단한 AI 답변을 생성합니다"""
