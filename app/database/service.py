@@ -204,8 +204,8 @@ async def save_message(
 
 async def save_prompt_log(
     session: AsyncSession,
-    msg_id: UUID,  # Message와 1:1 관계 (primary key, 필수)
-    conv_id,
+    msg_id: UUID | None = None,  # Message와 1:1 관계 (primary key, 선택적)
+    conv_id = None,
     user_id: str | None = None,  # user_id 추가
     model: str | None = None,
     prompt_name: str | None = None,
@@ -215,6 +215,11 @@ async def save_prompt_log(
 ) -> bool:
     """프롬프트 로그를 저장합니다. 성공 여부를 반환합니다."""
     try:
+        # msg_id가 None이면 프롬프트 로그 저장하지 않음
+        if msg_id is None:
+            logger.info(f"[PROMPT_LOG] msg_id가 None이므로 프롬프트 로그 저장 건너뜀")
+            return True
+            
         from uuid import UUID
         # conv_id를 UUID로 변환
         conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id)) if conv_id else None

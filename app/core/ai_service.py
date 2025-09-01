@@ -390,20 +390,16 @@ class AIService:
                         all_messages = list(result.scalars().all())
                     
                     # 현재 대화 세션에서 사용자 메시지만 정확하게 카운트
+                    # 현재 사용자 메시지도 포함하여 계산 (아직 DB에 저장되지 않았지만 현재 턴으로 카운트)
                     user_messages = [m for m in all_messages if m.role.value == "USER"]
-                    new_count = len(user_messages)
+                    new_count = len(user_messages) + 1  # 현재 사용자 메시지 포함
                     
                     # 10턴이 누적되었는지 확인하고 요약 실행
+                    # 현재 사용자 메시지가 DB에 저장된 후에 요약을 실행해야 하므로
+                    # 10턴에 도달했을 때는 요약 실행을 건너뛰고 로그만 남김
                     if new_count >= MAX_TURNS:
-                        logger.info(f"[SUMMARY] 10턴 누적 감지: {new_count}개, 요약 실행 시작")
-                        try:
-                            # 동기적으로 요약 실행 (저장 보장)
-                            from app.core.summary import maybe_rollup_user_summary
-                            await maybe_rollup_user_summary(session, user_id)
-                            logger.info(f"[SUMMARY] 10턴 요약 완료 및 저장됨")
-                        except Exception as summary_err:
-                            logger.warning(f"[SUMMARY] 10턴 요약 실패: {summary_err}")
-                            # 요약 실패 시에도 계속 진행 (사용자 응답은 생성)
+                        logger.info(f"[SUMMARY] 10턴 도달: {new_count}개, 현재 사용자 메시지 저장 후 요약 실행 예정")
+                        # 요약은 현재 사용자 메시지가 DB에 저장된 후 background_tasks.py에서 처리
                     else:
                         logger.info(f"[SUMMARY] 10턴 미달: {new_count}개 (필요: {MAX_TURNS}개)")
                     
@@ -501,42 +497,28 @@ class AIService:
             except Exception:
                 pass
 
-            # 응답 메시지 저장 및 프롬프트 로그 생성
-            # conv_id가 유효한 경우에만 메시지 저장
+            # 메시지 저장은 호출하는 곳에서 처리하므로 여기서는 제거
+            # 프롬프트 로그만 저장 (메시지 ID 없이)
             if conv_id and not str(conv_id).startswith("temp_"):
                 try:
-                    from app.database.models import MessageRole
-                    msg = Message(
-                        conv_id=conv_id,
-                        user_id=user_id,
-                        role=MessageRole.ASSISTANT,
-                        content=content,
-                        tokens=tokens_used,
-                        request_id=request_id
-                    )
-                    session.add(msg)
-                    await session.commit()
-                    await session.refresh(msg)
-
-                    # 메시지 ID로 프롬프트 로그 저장
                     success = await save_prompt_log(
                         session=session,
                         conv_id=conv_id,
-                        user_id=user_id,  # user_id 추가
+                        user_id=user_id,
                         model=self.model,
                         prompt_name=prompt_name,
                         temperature=self.temperature,
                         max_tokens=self.max_tokens,
                         messages_json=messages_json,
-                        msg_id=msg.msg_id  # Message의 msg_id를 PromptLog의 primary key로 사용
+                        msg_id=None  # 메시지 ID는 나중에 설정
                     )
                     if not success:
                         logger.warning("Failed to save prompt log")
 
                 except Exception as e:
-                    logger.warning(f"Failed to save message or prompt log: {e}")
+                    logger.warning(f"Failed to save prompt log: {e}")
             else:
-                logger.info(f"[MESSAGE_SAVE] conv_id가 유효하지 않아 메시지 저장 건너뜀: conv_id={conv_id}")
+                logger.info(f"[PROMPT_LOG] conv_id가 유효하지 않아 프롬프트 로그 저장 건너뜀: conv_id={conv_id}")
 
             logger.info(f"OpenAI response generated, tokens used: {tokens_used}")
             return content, tokens_used

@@ -264,13 +264,59 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     user_id=user_id,
                     request_id=request_id
                 )
-                await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
+                # AI 응답 메시지 저장
+                msg = await save_message(s, conv_id_value, "assistant", final_text, request_id, tokens_used, user_id)
+                
+                # 프롬프트 로그 저장 (메시지 ID 연결)
+                try:
+                    from app.database.service import save_prompt_log
+                    await save_prompt_log(
+                        session=s,
+                        msg_id=msg.msg_id,
+                        conv_id=conv_id_value,
+                        user_id=user_id,
+                        model="gpt-4o",  # 기본 모델
+                        prompt_name="온유",
+                        temperature=0.2,
+                        max_tokens=1000,
+                        messages_json=""
+                    )
+                except Exception as log_err:
+                    logger.warning(f"[PROMPT_LOG] 콜백 프롬프트 로그 저장 실패: {log_err}")
+                
+                # 10턴 요약 체크 및 실행
+                try:
+                    from app.database.models import Message
+                    from app.config import settings
+                    from sqlalchemy import select
+                    
+                    # 현재 대화 세션의 사용자 메시지 개수 확인
+                    stmt = (
+                        select(Message)
+                        .where(Message.conv_id == conv_id_value)
+                        .where(Message.role == "USER")
+                        .order_by(Message.created_at.asc())
+                    )
+                    result = await s.execute(stmt)
+                    user_messages = list(result.scalars().all())
+                    user_count = len(user_messages)
+                    
+                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                    
+                    if user_count >= MAX_TURNS:
+                        logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
+                        from app.core.summary import maybe_rollup_user_summary
+                        await maybe_rollup_user_summary(s, user_id)
+                    else:
+                        logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
+                        
+                except Exception as summary_err:
+                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
+                
                 try:
                     await save_log_message(s, "callback_final_sent", f"Callback final sent: {len(final_text)} chars", str(user_id), conv_id_value, {"tokens": tokens_used, "request_id": request_id})
                 except Exception as log_err:
                     logger.warning(f"Callback log save failed: {log_err}")
-                # 10턴 요약은 ai_service.py에서 처리하므로 여기서는 제거
-                pass
                 break
             except Exception as inner_e:
                 logger.bind(x_request_id=request_id).exception(f"Callback DB/AI error: {inner_e}")
@@ -328,7 +374,55 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                     conv = await get_or_create_conversation(s, user_id)
                     try:
                         await save_message(s, conv.conv_id, "user", user_text, request_id, None, user_id)
-                        await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), request_id, quick_tokens, user_id)
+                        
+                        # AI 응답 메시지 저장
+                        msg = await save_message(s, conv.conv_id, "assistant", remove_markdown(reply_text), request_id, quick_tokens, user_id)
+                        
+                        # 프롬프트 로그 저장 (메시지 ID 연결)
+                        try:
+                            from app.database.service import save_prompt_log
+                            await save_prompt_log(
+                                session=s,
+                                msg_id=msg.msg_id,
+                                conv_id=conv.conv_id,
+                                user_id=user_id,
+                                model="gpt-4o",  # 기본 모델
+                                prompt_name="온유",
+                                temperature=0.2,
+                                max_tokens=1000,
+                                messages_json=""
+                            )
+                        except Exception as log_err:
+                            logger.warning(f"[PROMPT_LOG] 빠른 응답 프롬프트 로그 저장 실패: {log_err}")
+                        
+                        # 10턴 요약 체크 및 실행
+                        try:
+                            from app.database.models import Message
+                            from app.config import settings
+                            from sqlalchemy import select
+                            
+                            # 현재 대화 세션의 사용자 메시지 개수 확인
+                            stmt = (
+                                select(Message)
+                                .where(Message.conv_id == conv.conv_id)
+                                .where(Message.role == "USER")
+                                .order_by(Message.created_at.asc())
+                            )
+                            result = await s.execute(stmt)
+                            user_messages = list(result.scalars().all())
+                            user_count = len(user_messages)
+                            
+                            MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                            
+                            if user_count >= MAX_TURNS:
+                                logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
+                                from app.core.summary import maybe_rollup_user_summary
+                                await maybe_rollup_user_summary(s, user_id)
+                            else:
+                                logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
+                                
+                        except Exception as summary_err:
+                            logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
                     except Exception:
                         try:
                             await s.rollback()
@@ -1485,7 +1579,55 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     async def _save_ai_response_background(conv_id, final_text, tokens_used, x_request_id, user_id):
                         async for s in get_session():
                             try:
-                                await save_message(s, conv_id, "assistant", final_text, x_request_id, tokens_used, user_id)
+                                # AI 응답 메시지 저장
+                                msg = await save_message(s, conv_id, "assistant", final_text, x_request_id, tokens_used, user_id)
+                                
+                                # 프롬프트 로그 저장 (메시지 ID 연결)
+                                try:
+                                    from app.database.service import save_prompt_log
+                                    await save_prompt_log(
+                                        session=s,
+                                        msg_id=msg.msg_id,
+                                        conv_id=conv_id,
+                                        user_id=user_id,
+                                        model="gpt-4o",  # 기본 모델
+                                        prompt_name="온유",
+                                        temperature=0.2,
+                                        max_tokens=1000,
+                                        messages_json=""
+                                    )
+                                except Exception as log_err:
+                                    logger.warning(f"[PROMPT_LOG] 프롬프트 로그 저장 실패: {log_err}")
+                                
+                                # 10턴 요약 체크 및 실행
+                                try:
+                                    from app.database.models import Message
+                                    from app.config import settings
+                                    from sqlalchemy import select
+                                    
+                                    # 현재 대화 세션의 사용자 메시지 개수 확인
+                                    stmt = (
+                                        select(Message)
+                                        .where(Message.conv_id == conv_id)
+                                        .where(Message.role == "USER")
+                                        .order_by(Message.created_at.asc())
+                                    )
+                                    result = await s.execute(stmt)
+                                    user_messages = list(result.scalars().all())
+                                    user_count = len(user_messages)
+                                    
+                                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                                    
+                                    if user_count >= MAX_TURNS:
+                                        logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
+                                        from app.core.summary import maybe_rollup_user_summary
+                                        await maybe_rollup_user_summary(s, user_id)
+                                    else:
+                                        logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
+                                        
+                                except Exception as summary_err:
+                                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
+                                
                                 break
                             except Exception as e:
                                 logger.warning(f"[SAVE_MESSAGE] AI 응답 메시지 저장 실패: {e}")
@@ -1494,7 +1636,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                     # 사용자 메시지를 먼저 저장 (순서 보장)
                     await _save_user_message_background(conv_id, user_text, x_request_id, user_id)
                     # AI 응답을 나중에 저장
-                    asyncio.create_task(_save_ai_response_background(conv_id, final_text, 0, x_request_id, user_id))
+                    asyncio.create_task(_save_ai_response_background(conv_id, final_text, tokens_used, x_request_id, user_id))
                 else:
                     # conv_id가 None이거나 temp_인 경우 백그라운드에서 저장 시도
                     async def _persist_when_db_ready(user_id: str, user_text: str, reply_text: str, request_id: str | None):

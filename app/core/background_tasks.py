@@ -124,7 +124,8 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     except Exception:
                         pass
             try:
-                await save_message(
+                # AI 응답 메시지 저장
+                msg = await save_message(
                     session=session, 
                     conv_id=conv_id, 
                     role="assistant", 
@@ -133,6 +134,24 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     tokens=tokens_used,
                     user_id=user_id,
                 )
+                
+                # 프롬프트 로그 저장 (메시지 ID 연결)
+                try:
+                    from app.database.service import save_prompt_log
+                    await save_prompt_log(
+                        session=session,
+                        msg_id=msg.msg_id,
+                        conv_id=conv_id,
+                        user_id=user_id,
+                        model="gpt-4o",  # 기본 모델
+                        prompt_name="온유",
+                        temperature=0.2,
+                        max_tokens=1000,
+                        messages_json=""
+                    )
+                except Exception as log_err:
+                    logger.warning(f"[PROMPT_LOG] 프롬프트 로그 저장 실패: {log_err}")
+                
                 try:
                     await save_log_message(session, "message_saved_assistant", f"AI response saved for conv {conv_id}", str(user_id), conv_id, {"tokens": tokens_used, "request_id": request_id})
                 except Exception:
@@ -153,15 +172,38 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                     raise
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
             try:
-                # conv_id로 user_id 조회 후 사용자 요약 롤업
+                # 10턴 요약 체크 및 실행
                 try:
-                    from app.database.models import Conversation
+                    from app.database.models import Conversation, Message
+                    from app.config import settings
+                    from sqlalchemy import select
+                    
                     conv = await session.get(Conversation, conv_id)
                     if conv:
-                        await maybe_rollup_user_summary(session, conv.user_id)
-                except Exception:
+                        # 현재 대화 세션의 사용자 메시지 개수 확인
+                        stmt = (
+                            select(Message)
+                            .where(Message.conv_id == conv_id)
+                            .where(Message.role == "USER")
+                            .order_by(Message.created_at.asc())
+                        )
+                        result = await session.execute(stmt)
+                        user_messages = list(result.scalars().all())
+                        user_count = len(user_messages)
+                        
+                        MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                        
+                        if user_count >= MAX_TURNS:
+                            logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={conv.user_id})")
+                            await maybe_rollup_user_summary(session, conv.user_id)
+                        else:
+                            logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
+                            
+                except Exception as summary_err:
+                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
                     try:
                         await session.rollback()
+                        # 롤백 후 다시 시도
                         conv = await session.get(Conversation, conv_id)
                         if conv:
                             await maybe_rollup_user_summary(session, conv.user_id)
