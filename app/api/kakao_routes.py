@@ -833,7 +833,7 @@ async def handle_name_flow(
                 await save_log_message(session, "name_wait_start", "Name wait started", str(user_id), None, {"x_request_id": x_request_id})
             except Exception:
                 pass
-            return kakao_text(f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n💡 팁: 자연스럽게 '내 이름은 민수야'라고 말해도 알아들어요!")
+            return kakao_text(f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n💡 팁: 자연스럽게 '내 이름은 민수야'라고 말해도 알아들을 수 있어!\n\n👉 취소를 입력하면 이름 변경이 취소돼.")
 
         # 3-2) 이미 대기 상태: 일반 입력 처리
         if PendingNameCache.is_waiting(user_id):
@@ -1397,7 +1397,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                 logger.info(f"[질문] 이름 요청 → 대기 상태")
                 PendingNameCache.set_waiting(user_id)
                 prompt_name = await get_active_prompt_name(session)
-                return kakao_text(f"안녕! 처음 보네~ 나는 {prompt_name}야🐥\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줘!")
+                return kakao_text(f"안녕! 처음 보네~ 나는 {prompt_name}야🐥\n불리고 싶은 이름을 알려주면, 앞으로 그렇게 불러줄게!")
         
         # '/이름' 명령 처리
         if user_text_stripped == "/이름":
@@ -1406,6 +1406,7 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
             return kakao_text(
                 f"불리고 싶은 이름을 입력해줘! 그럼 {prompt_name}가 꼭 기억할게~\n\n"
                 f"💡 자연스럽게 '내 이름은 민수야'라고 말해도 알아들을 수 있어!"
+                f"\n👉 취소를 입력하면 이름 변경이 취소돼."
             )
 
         # 이름 대기 상태 처리
