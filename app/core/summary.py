@@ -136,12 +136,13 @@ async def maybe_rollup_user_summary(
     from app.config import settings
     MAX_TURNS = getattr(settings, "summary_turn_window", 10)
 
-    # user_id 기준 전체 메시지 조회
+    # user_id 기준 사용자 메시지만 조회 (AI 응답 제외)
     from app.database.models import Conversation as DBConversation
     stmt = (
         select(Message)
         .join(DBConversation, Message.conv_id == DBConversation.conv_id)
         .where(DBConversation.user_id == user_id)
+        .where(Message.role == "USER")  # 사용자 메시지만 카운트
         .order_by(Message.created_at.asc())
     )
     try:
@@ -176,8 +177,55 @@ async def maybe_rollup_user_summary(
         logger.info(f"[SUMMARY] 10턴 요약 스킵: 현재 {new_count}개, 필요 {MAX_TURNS}개 (user_id={user_id})")
         return
 
-    # 전체 10턴 대화로 요약 생성
-    recent = msgs[-MAX_TURNS:]
+    # 최근 10턴 대화 조회: 최근 10개 사용자 메시지와 그에 대응하는 AI 응답
+    # 1단계: 최근 10개 사용자 메시지의 시간 범위 확인
+    user_msg_stmt = (
+        select(Message)
+        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+        .where(DBConversation.user_id == user_id)
+        .where(Message.role == "USER")
+        .order_by(Message.created_at.desc())
+        .limit(MAX_TURNS)
+    )
+    try:
+        user_msg_res = await session.execute(user_msg_stmt)
+        recent_user_msgs = list(user_msg_res.scalars().all())
+    except Exception:
+        try:
+            await session.rollback()
+            user_msg_res = await session.execute(user_msg_stmt)
+            recent_user_msgs = list(user_msg_res.scalars().all())
+        except Exception as e:
+            logger.warning(f"Recent user messages query failed: {e}")
+            return
+    
+    if not recent_user_msgs:
+        logger.warning(f"No recent user messages found for user_id={user_id}")
+        return
+    
+    # 2단계: 최근 10개 사용자 메시지의 시간 범위로 전체 대화 조회
+    oldest_user_msg_time = recent_user_msgs[-1].created_at
+    recent_stmt = (
+        select(Message)
+        .join(DBConversation, Message.conv_id == DBConversation.conv_id)
+        .where(DBConversation.user_id == user_id)
+        .where(Message.created_at >= oldest_user_msg_time)
+        .order_by(Message.created_at.asc())  # 시간순 정렬
+    )
+    try:
+        recent_res = await session.execute(recent_stmt)
+        recent_msgs = list(recent_res.scalars().all())
+    except Exception:
+        try:
+            await session.rollback()
+            recent_res = await session.execute(recent_stmt)
+            recent_msgs = list(recent_res.scalars().all())
+        except Exception as e:
+            logger.warning(f"Recent conversation query failed: {e}")
+            return
+    
+    # 최근 10턴 대화로 요약 생성
+    recent = recent_msgs
     existing_summary = (us.summary or "").strip()
     
     logger.info(f"[SUMMARY] 10턴 요약 시작: {len(recent)}개 메시지, 기존 요약 길이 {len(existing_summary)}자 (user_id={user_id})")
@@ -207,7 +255,7 @@ async def maybe_rollup_user_summary(
 
     # ?�용???�약�?마�?�?메시지 ?�간 갱신
     us.summary = (merged_text or existing_summary).strip()
-    us.last_message_created_at = msgs[-1].created_at
+    us.last_message_created_at = msgs[-1].created_at if msgs else us.last_message_created_at
     from datetime import datetime
     us.updated_at = datetime.now()
     try:

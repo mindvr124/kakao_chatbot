@@ -173,46 +173,7 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
                 except Exception:
                     raise
             logger.bind(x_request_id=request_id).info(f"AI response saved successfully")
-            try:
-                # 10턴 요약 체크 및 실행
-                try:
-                    from app.database.models import Conversation, Message
-                    from app.config import settings
-                    from sqlalchemy import select
-                    
-                    conv = await session.get(Conversation, conv_id)
-                    if conv:
-                        # 현재 대화 세션의 사용자 메시지 개수 확인
-                        stmt = (
-                            select(Message)
-                            .where(Message.conv_id == conv_id)
-                            .where(Message.role == "USER")
-                            .order_by(Message.created_at.asc())
-                        )
-                        result = await session.execute(stmt)
-                        user_messages = list(result.scalars().all())
-                        user_count = len(user_messages)
-                        
-                        MAX_TURNS = getattr(settings, "summary_turn_window", 10)
-                        
-                        if user_count >= MAX_TURNS:
-                            logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={conv.user_id})")
-                            await maybe_rollup_user_summary(session, conv.user_id)
-                        else:
-                            logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
-                            
-                except Exception as summary_err:
-                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
-                    try:
-                        await session.rollback()
-                        # 롤백 후 다시 시도
-                        conv = await session.get(Conversation, conv_id)
-                        if conv:
-                            await maybe_rollup_user_summary(session, conv.user_id)
-                    except Exception:
-                        pass
-            finally:
-                pass
+            # 10턴 요약은 _save_conversation_messages에서 처리됨
             try:
                 update_last_activity(conv_id)
             finally:
