@@ -250,11 +250,7 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     return await get_or_create_conversation(s, user_id)
                 conv = await asyncio.wait_for(_ensure_conv(), timeout=0.7)
                 conv_id_value = str(conv.conv_id)
-                try:
-                    if user_text:
-                        await save_message(s, conv_id_value, "user", user_text, request_id, None, user_id)
-                except Exception as save_user_err:
-                    logger.bind(x_request_id=request_id).warning(f"Failed to save user message in callback: {save_user_err}")
+                # 사용자 메시지 저장은 background_tasks에서 처리
 
                 final_text, tokens_used, prompt_params = await ai_service.generate_response(
                     session=s,
@@ -264,10 +260,10 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     user_id=user_id,
                     request_id=request_id
                 )
-                # AI 응답 메시지 저장 및 프롬프트 로그 저장은 background_tasks로 처리
-                from app.core.background_tasks import _save_ai_response_background
-                await _save_ai_response_background(
-                    conv_id_value, final_text, tokens_used, request_id, user_id,
+                # 메시지 저장은 background_tasks에서 순서 보장하여 처리
+                from app.core.background_tasks import _save_conversation_messages
+                await _save_conversation_messages(
+                    conv_id_value, user_text, final_text, tokens_used, request_id, user_id,
                     prompt_params.get("messages_json"),
                     prompt_params.get("model"),
                     prompt_params.get("prompt_name"),
@@ -275,34 +271,7 @@ async def _handle_callback_full(callback_url: str, user_id: str, user_text: str,
                     prompt_params.get("max_completion_tokens")
                 )
                 
-                # 10턴 요약 체크 및 실행
-                try:
-                    from app.database.models import Message
-                    from app.config import settings
-                    from sqlalchemy import select
-                    
-                    # 현재 대화 세션의 사용자 메시지 개수 확인
-                    stmt = (
-                        select(Message)
-                        .where(Message.conv_id == conv_id_value)
-                        .where(Message.role == "USER")
-                        .order_by(Message.created_at.asc())
-                    )
-                    result = await s.execute(stmt)
-                    user_messages = list(result.scalars().all())
-                    user_count = len(user_messages)
-                    
-                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
-                    
-                    if user_count >= MAX_TURNS:
-                        logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
-                        from app.core.summary import maybe_rollup_user_summary
-                        await maybe_rollup_user_summary(s, user_id)
-                    else:
-                        logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
-                        
-                except Exception as summary_err:
-                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
+                # 10턴 요약은 background_tasks.py에서 처리됨
                 
                 try:
                     await save_log_message(s, "callback_final_sent", f"Callback final sent: {len(final_text)} chars", str(user_id), conv_id_value, {"tokens": tokens_used, "request_id": request_id})
@@ -363,56 +332,16 @@ async def _handle_callback_flow(session: AsyncSession, user_id: str, user_text: 
                 try:
                     await upsert_user(s, user_id)
                     conv = await get_or_create_conversation(s, user_id)
-                    try:
-                        await save_message(s, conv.conv_id, "user", user_text, request_id, None, user_id)
-                        
-                        # AI 응답 메시지 저장 및 프롬프트 로그 저장은 background_tasks로 처리
-                        from app.core.background_tasks import _save_ai_response_background
-                        await _save_ai_response_background(
-                            conv.conv_id, remove_markdown(reply_text), quick_tokens, request_id, user_id,
-                            prompt_params.get("messages_json"),
-                            prompt_params.get("model"),
-                            prompt_params.get("prompt_name"),
-                            prompt_params.get("temperature"),
-                            prompt_params.get("max_completion_tokens")
-                        )
-                        
-                        # 10턴 요약 체크 및 실행
-                        try:
-                            from app.database.models import Message
-                            from app.config import settings
-                            from sqlalchemy import select
-                            
-                            # 현재 대화 세션의 사용자 메시지 개수 확인
-                            stmt = (
-                                select(Message)
-                                .where(Message.conv_id == conv.conv_id)
-                                .where(Message.role == "USER")
-                                .order_by(Message.created_at.asc())
-                            )
-                            result = await s.execute(stmt)
-                            user_messages = list(result.scalars().all())
-                            user_count = len(user_messages)
-                            
-                            MAX_TURNS = getattr(settings, "summary_turn_window", 10)
-                            
-                            if user_count >= MAX_TURNS:
-                                logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
-                                from app.core.summary import maybe_rollup_user_summary
-                                await maybe_rollup_user_summary(s, user_id)
-                            else:
-                                logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
-                                
-                        except Exception as summary_err:
-                            logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
-                    except Exception:
-                        try:
-                            await s.rollback()
-                        except Exception:
-                            pass
-                        raise
-                    # 10턴 요약은 ai_service.py에서 처리하므로 여기서는 제거
-                    pass
+                    # 메시지 저장은 background_tasks에서 순서 보장하여 처리
+                    from app.core.background_tasks import _save_conversation_messages
+                    await _save_conversation_messages(
+                        conv.conv_id, user_text, remove_markdown(reply_text), quick_tokens, request_id, user_id,
+                        prompt_params.get("messages_json"),
+                        prompt_params.get("model"),
+                        prompt_params.get("prompt_name"),
+                        prompt_params.get("temperature"),
+                        prompt_params.get("max_completion_tokens")
+                    )
                     break
                 except Exception as persist_err:
                     try:
@@ -837,7 +766,7 @@ async def handle_name_flow(
 
         # 3-2) 이미 대기 상태: 일반 입력 처리
         if PendingNameCache.is_waiting(user_id):
-            if user_text in ("취소", "그만", "아냐", "아니야", "됐어", "아니"):
+            if user_text in ("취소", "그만", "아냐", "아니야", "됐어", "아니", "중단", "안할래", "그만해", "ㄴㄴ"):
                 PendingNameCache.clear(user_id)
                 return kakao_text("좋아, 다음에 다시 알려줘!")
 
@@ -1567,44 +1496,18 @@ async def skill_endpoint(request: Request, session: AsyncSession = Depends(get_s
                                 
                                 # 프롬프트 로그는 background_tasks.py에서 처리됨
                                 
-                                # 10턴 요약 체크 및 실행
-                                try:
-                                    from app.database.models import Message
-                                    from app.config import settings
-                                    from sqlalchemy import select
-                                    
-                                    # 현재 대화 세션의 사용자 메시지 개수 확인
-                                    stmt = (
-                                        select(Message)
-                                        .where(Message.conv_id == conv_id)
-                                        .where(Message.role == "USER")
-                                        .order_by(Message.created_at.asc())
-                                    )
-                                    result = await s.execute(stmt)
-                                    user_messages = list(result.scalars().all())
-                                    user_count = len(user_messages)
-                                    
-                                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
-                                    
-                                    if user_count >= MAX_TURNS:
-                                        logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={user_id})")
-                                        from app.core.summary import maybe_rollup_user_summary
-                                        await maybe_rollup_user_summary(s, user_id)
-                                    else:
-                                        logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
-                                        
-                                except Exception as summary_err:
-                                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
+                                # 10턴 요약은 background_tasks.py에서 처리됨
                                 
                                 break
                             except Exception as e:
                                 logger.warning(f"[SAVE_MESSAGE] AI 응답 메시지 저장 실패: {e}")
                                 break
 
-                    # 사용자 메시지를 먼저 저장 (순서 보장)
-                    await _save_user_message_background(conv_id, user_text, x_request_id, user_id)
-                    # AI 응답을 나중에 저장
-                    asyncio.create_task(_save_ai_response_background(conv_id, final_text, tokens_used, x_request_id, user_id))
+                    # 메시지 저장은 background_tasks에서 순서 보장하여 처리
+                    from app.core.background_tasks import _save_conversation_messages
+                    asyncio.create_task(_save_conversation_messages(
+                        conv_id, user_text, final_text, tokens_used, x_request_id, user_id
+                    ))
                 else:
                     # conv_id가 None이거나 temp_인 경우 백그라운드에서 저장 시도
                     async def _persist_when_db_ready(user_id: str, user_text: str, reply_text: str, request_id: str | None):

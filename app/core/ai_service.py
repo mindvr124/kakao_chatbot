@@ -355,59 +355,7 @@ class AIService:
 
             messages = await self.build_messages(session, conv_id, user_input, prompt_name, user_id)
 
-            # 10턴 요약 및 2분 비활성 요약 체크
-            if user_id:
-                try:
-                    # 10턴 요약 체크 (10턴이 누적되었는지 확인)
-                    from app.config import settings
-                    MAX_TURNS = getattr(settings, "summary_turn_window", 10)
-                    
-                    # conv_id를 conv_uuid로 변환
-                    conv_uuid: UUID | None = None
-                    try:
-                        conv_uuid = conv_id if isinstance(conv_id, UUID) else UUID(str(conv_id))
-                    except Exception:
-                        conv_uuid = None
-                    
-                    # 현재 대화 세션(conv_id) 기준으로 메시지 개수 확인
-                    if conv_uuid:
-                        stmt = (
-                            select(Message)
-                            .where(Message.conv_id == conv_uuid)
-                            .order_by(Message.created_at.asc())
-                        )
-                        result = await session.execute(stmt)
-                        all_messages = list(result.scalars().all())
-                    else:
-                        # conv_id가 없으면 전체 사용자 메시지로 폴백
-                        stmt = (
-                            select(Message)
-                            .join(DBConversation, Message.conv_id == DBConversation.conv_id)
-                            .where(DBConversation.user_id == user_id)
-                            .order_by(Message.created_at.asc())
-                        )
-                        result = await session.execute(stmt)
-                        all_messages = list(result.scalars().all())
-                    
-                    # 현재 대화 세션에서 사용자 메시지만 정확하게 카운트
-                    # 현재 사용자 메시지도 포함하여 계산 (아직 DB에 저장되지 않았지만 현재 턴으로 카운트)
-                    user_messages = [m for m in all_messages if m.role.value == "USER"]
-                    new_count = len(user_messages) + 1  # 현재 사용자 메시지 포함
-                    
-                    # 10턴이 누적되었는지 확인하고 요약 실행
-                    # 현재 사용자 메시지가 DB에 저장된 후에 요약을 실행해야 하므로
-                    # 10턴에 도달했을 때는 요약 실행을 건너뛰고 로그만 남김
-                    if new_count >= MAX_TURNS:
-                        logger.info(f"[SUMMARY] 10턴 도달: {new_count}개, 현재 사용자 메시지 저장 후 요약 실행 예정")
-                        # 요약은 현재 사용자 메시지가 DB에 저장된 후 background_tasks.py에서 처리
-                    else:
-                        logger.info(f"[SUMMARY] 10턴 미달: {new_count}개 (필요: {MAX_TURNS}개)")
-                    
-                    # 2분 비활성 요약은 background_tasks.py에서 처리되므로 여기서는 로그만
-                    logger.info(f"[SUMMARY] 현재 상태: {new_count}번째 턴, 필요 {MAX_TURNS}턴")
-                    
-                except Exception as e:
-                    logger.warning(f"[SUMMARY] 요약 체크 실패: {e}")
+            # 10턴 요약은 background_tasks.py에서 처리됨
 
             logger.info(f"Calling OpenAI Chat Completions with {len(messages)} messages")
 
@@ -418,14 +366,8 @@ class AIService:
             except Exception:
                 pass
 
-            # 요약 vs 채팅 구분하여 토큰 설정
-            is_summary_request = (
-                any("요약" in msg.get("content", "") for msg in messages) or 
-                "summary" in prompt_name.lower() or
-                any("롤업" in msg.get("content", "") for msg in messages) or
-                any("병합" in msg.get("content", "") for msg in messages) or
-                any("중복 없이" in msg.get("content", "") for msg in messages)
-            )
+            # 요약 vs 채팅 구분하여 토큰 설정 (백엔드 전용 요약만 허용)
+            is_summary_request = "summary" in prompt_name.lower()
             
             if is_summary_request:
                 # 요약용 토큰 설정 (완전한 요약 보장)

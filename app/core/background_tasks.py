@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database.db import get_session
-from app.database.service import save_message, save_log_message
+from app.database.service import save_message, save_log_message, save_prompt_log
 from app.core.ai_processing_service import ai_processing_service
 from loguru import logger
 import asyncio
@@ -220,6 +220,145 @@ async def _save_ai_response_background(conv_id: str, final_text: str, tokens_use
             
     except Exception as e:
         logger.bind(x_request_id=request_id).exception(f"Failed to save AI response in background: {e}")
+
+
+async def _save_conversation_messages(
+    conv_id: str, 
+    user_text: str, 
+    ai_text: str, 
+    tokens_used: int, 
+    request_id: str | None, 
+    user_id: str | None = None,
+    messages_json: str | None = None,
+    model: str | None = None,
+    prompt_name: str | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None
+):
+    """대화 메시지를 순서 보장하여 저장"""
+    try:
+        logger.bind(x_request_id=request_id).info(f"Saving conversation messages in order")
+        
+        # conv_id 유효성 검사
+        if not conv_id:
+            logger.bind(x_request_id=request_id).error(f"conv_id is empty or None: {conv_id}")
+            return
+        
+        # temp_로 시작하는 conv_id는 처리하지 않음
+        if str(conv_id).startswith("temp_"):
+            logger.bind(x_request_id=request_id).info(f"Skipping temp conv_id: {conv_id}")
+            return
+        
+        # 새로운 세션으로 DB 저장
+        async for session in get_session():
+            try:
+                # user_id가 없으면 conv에서 조회 시도
+                if user_id is None:
+                    try:
+                        conv = await session.get(Conversation, conv_id)
+                        if conv:
+                            user_id = conv.user_id
+                    except Exception:
+                        try:
+                            await session.rollback()
+                            conv = await session.get(Conversation, conv_id)
+                            if conv:
+                                user_id = conv.user_id
+                        except Exception:
+                            pass
+                
+                # 1. 사용자 메시지 먼저 저장
+                if user_text:
+                    await save_message(
+                        session=session, 
+                        conv_id=conv_id, 
+                        role="user", 
+                        content=user_text, 
+                        request_id=request_id,
+                        tokens=None,
+                        user_id=user_id,
+                    )
+                    logger.bind(x_request_id=request_id).info(f"User message saved successfully")
+                
+                # 2. AI 응답 메시지 저장
+                if ai_text:
+                    msg = await save_message(
+                        session=session, 
+                        conv_id=conv_id, 
+                        role="assistant", 
+                        content=remove_markdown(ai_text), 
+                        request_id=request_id,
+                        tokens=tokens_used,
+                        user_id=user_id,
+                    )
+                    logger.bind(x_request_id=request_id).info(f"AI response message saved successfully")
+                    
+                    # 3. 프롬프트 로그 저장 (메시지 ID 연결)
+                    if messages_json and model and prompt_name:
+                        try:
+                            await save_prompt_log(
+                                session=session,
+                                msg_id=msg.msg_id,
+                                conv_id=conv_id,
+                                user_id=user_id,
+                                model=model,
+                                prompt_name=prompt_name,
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                messages_json=messages_json
+                            )
+                            logger.bind(x_request_id=request_id).info(f"Prompt log saved successfully")
+                        except Exception as log_err:
+                            logger.warning(f"Failed to save prompt log: {log_err}")
+                
+                # 4. 10턴 요약 체크 및 실행
+                try:
+                    from app.database.models import Message
+                    from app.config import settings
+                    from sqlalchemy import select
+                    
+                    conv = await session.get(Conversation, conv_id)
+                    if conv:
+                        # 현재 대화 세션의 사용자 메시지 개수 확인
+                        stmt = (
+                            select(Message)
+                            .where(Message.conv_id == conv_id)
+                            .where(Message.role == "USER")
+                            .order_by(Message.created_at.asc())
+                        )
+                        result = await session.execute(stmt)
+                        user_messages = list(result.scalars().all())
+                        user_count = len(user_messages)
+                        
+                        MAX_TURNS = getattr(settings, "summary_turn_window", 10)
+                        
+                        if user_count >= MAX_TURNS:
+                            logger.info(f"[SUMMARY] 10턴 요약 실행: {user_count}개 사용자 메시지 (user_id={conv.user_id})")
+                            await maybe_rollup_user_summary(session, conv.user_id)
+                        else:
+                            logger.info(f"[SUMMARY] 10턴 미달: {user_count}개 (필요: {MAX_TURNS}개)")
+                            
+                except Exception as summary_err:
+                    logger.warning(f"[SUMMARY] 10턴 요약 체크 실패: {summary_err}")
+                
+                # 5. 활동 시간 업데이트
+                try:
+                    update_last_activity(conv_id)
+                except Exception:
+                    pass
+                
+                break
+                
+            except Exception as e:
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                logger.bind(x_request_id=request_id).exception(f"Failed to save conversation messages: {e}")
+                break
+            
+    except Exception as e:
+        logger.bind(x_request_id=request_id).exception(f"Failed to save conversation messages: {e}")
 
 
 def send_kakao_callback(callback_url, final_answer):
